@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,17 +56,6 @@ func hasPathPrefix(p, root string) bool {
 	return p == root || len(p) > len(root) && p[len(root)] == filepath.Separator && p[:len(root)] == root
 }
 
-// anyRunningForPath reports whether an agent job is currently running anywhere
-// in rel, so a manual save/rename can refuse to race an in-flight agent edit.
-func (m *agentManager) anyRunningForPath(rel string) bool {
-	if m == nil {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.overlapLocked(rel, math.MinInt/2, math.MaxInt/2)
-}
-
 func validEditableContent(b []byte) bool {
 	if len(b) > maxEditBytes {
 		return false
@@ -90,11 +78,9 @@ type fileSaveReq struct {
 	Size    int64  `json:"size"`
 }
 
-// handleFileSave writes a small text edit back to disk. It is the only place
-// px0 itself ever mutates a tracked project file directly (everything else goes
-// through an external coding agent) so it stays deliberately narrow: a size
-// cap, a text-only check, an optimistic-concurrency check against the agent
-// job list and the file's own mtime/size, and an atomic write.
+// handleFileSave writes an edit back to disk. Deliberately narrow: a size cap,
+// a text-only check, an optimistic-concurrency check against the file's own
+// mtime/size, and an atomic write.
 func (s *Server) handleFileSave(w http.ResponseWriter, r *http.Request) {
 	if !localPost(w, r) {
 		return
@@ -117,10 +103,6 @@ func (s *Server) handleFileSave(w http.ResponseWriter, r *http.Request) {
 	content := []byte(req.Content)
 	if !validEditableContent(content) {
 		fail(w, 413, "file is too large or not plain text to edit")
-		return
-	}
-	if s.agent != nil && s.agent.anyRunningForPath(rel) {
-		fail(w, 409, "an agent edit is running on this file")
 		return
 	}
 	st, err := os.Stat(abs)
@@ -171,7 +153,6 @@ func (s *Server) handleFileSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	Evict(abs)
-	s.lsp.CloseDoc(abs, rel)
 
 	newSt, err := os.Stat(abs)
 	if err != nil {
@@ -257,10 +238,6 @@ func (s *Server) handleFileRename(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "bad newPath")
 		return
 	}
-	if s.agent != nil && s.agent.anyRunningForPath(srcRel) {
-		fail(w, 409, "an agent edit is running on this file")
-		return
-	}
 	if _, err := os.Stat(dstAbs); err == nil {
 		fail(w, 409, "a file already exists at the destination")
 		return
@@ -274,6 +251,5 @@ func (s *Server) handleFileRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Evict(srcAbs)
-	s.lsp.CloseDoc(srcAbs, srcRel)
 	writeJSON(w, map[string]any{"ok": true, "path": srcRel, "newPath": dstRel})
 }
