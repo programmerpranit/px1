@@ -2431,14 +2431,18 @@ async function discardAll() {
 async function generateMessage() {
   setErr('');
   const btn = $('#scm-generate');
-  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+  if (btn) { btn.disabled = true; btn.classList.add('generating'); btn.title = 'Generating…'; }
   try {
     const j = await apiPostJson('/api/git/commit-message', {});
     if (messageEl) messageEl.value = j.message || '';
   } catch (e) {
     setErr(e.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Generate'; }
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('generating');
+      btn.title = 'Generate a commit message from staged changes';
+    }
   }
 }
 

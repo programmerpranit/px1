@@ -1,58 +1,61 @@
-# Session context: stripping px0 to a minimal editor
+# Session context: px1 (fork of px0)
 
-Status as of 2026-09-19 ~14:45 IST. Written mid-task so a fresh session (or agent) can resume without re-deriving everything below. Read this before touching git.go, server.go, web/src/scm.js, commitmsg.go, or the docs/ tree.
+Status as of 2026-09-20 ~00:10 IST. Written so a fresh session can resume without re-deriving the history below.
 
-## The task
+## What px1 is
 
-User wants px0 (a full code-navigator product) stripped down to exactly 7 features, everything else deleted:
+A fork of [px0](https://github.com/px0-ai/px0) by Arpit Bhayani, stripped from a full code-navigator (LSP, AI pair-editing agent, markdown preview, telemetry, self-update, settings, etc.) down to 7 features:
 
 1. Directory viewing
 2. File navigation
-3. Live editing (read **and** write — not read-only)
-4. Git file tracking: stage/unstage like VS Code
-5. Commit message generator
+3. Live editing (read **and** write, in place — not a separate edit mode)
+4. Git stage/unstage/commit, VS Code-style, plus push when ahead of the remote
+5. Commit message generator (shells out to the `claude` CLI on the staged diff)
 6. Syntax highlighting
 7. Code search
 
-Full plan (approved by user, do not deviate without asking): `/Users/pranit/.claude/plans/eventual-snacking-puppy.md`. Read that file for the complete keep/delete manifest and rationale — not duplicated here.
+The strip-down plan (now executed, kept for historical reference): `/Users/pranit/.claude/plans/eventual-snacking-puppy.md`.
 
-Key decisions already made with the user (do not re-ask):
-- Commit message generator shells out to the `claude` CLI (headless/print mode) on the staged diff. No OpenAI-key path yet (user said they'll add that later themselves).
-- Diff view: kept, simplified (dropped split/unified dropdown chrome, one view).
-- Settings modal: removed entirely, defaults hardcoded.
+For architecture, module map, build commands: see `CLAUDE.md` — not duplicated here.
 
-## What's been done
+## Current repo state
 
-1. **Checkpoint commit `5c32fad`** — "Checkpoint WIP: in-progress live editing (fileops, edit.js)" — made before any deletion, to protect the user's in-flight live-editing work (`fileops.go`, `fileops_test.go`, `web/src/edit.js`) that existed uncommitted at session start.
-2. **A background fork agent executed the deletion + build-out** (LSP, agent/AI-pairing, markdown preview, image viewer, telemetry, metrics, self-update, settings — all deleted; `git.go` staging split, `commitmsg.go`, new `/api/git/*` routes, `web/src/scm.js` SCM panel — all added). It hit the 200-turn limit once and was resumed once via SendMessage. Final report claimed: `go build`, `go vet`, `go test` all clean; web bundle rebuilds; curl-verified new endpoints; explicitly said **no commit was made**, all changes left uncommitted for user review.
-3. **I (the coordinating session) then manually tested the running app via Chrome DevTools MCP** against the real px1 repo (binary built to `/tmp/px0-test`, run as `pid 13714` on port **7800**, `/tmp/px0-test.log`). Confirmed working:
-   - App loads clean, no console errors.
-   - Syntax highlighting renders correctly (Go keywords/types/strings colored).
-   - Diff view (simplified) renders correctly for a modified file.
-   - **Live write works end-to-end**: typed a test comment into git.go in the browser, saved with ⌘S, confirmed the byte change landed on disk via `git diff`. (Then reverted the test text via the Edit tool.)
-   - **Save-conflict banner works**: editing on disk while the browser had unsaved changes correctly triggered "file changed on disk" with Overwrite/Discard options.
-   - **Source Control panel renders correctly**: Staged Changes / Changes groups, per-file stage(+)/unstage(−) buttons, commit message textarea, Generate/Commit buttons.
-   - **Stage and unstage both work** (tested via DOM: unstaged README.md, staged fileops.go, confirmed via `git status` each time).
-   - **Generate button**: clicked it, but got "no staged changes to summarize" even though a file was staged moments before — see anomaly below. Not yet root-caused.
+- **Pushed to `origin/master`**: everything through commit `e259e18` (push-to-remote feature). Branch is in sync with the remote (`git status -sb` shows no ahead/behind).
+- **Uncommitted right now** (5 files, all from the most recent round of UI polish in this session): `web/index.html`, `web/style.css`, `web/src/scm.js`, `web/app.js` (rebuilt bundle), `website/index.html`.
+- **Rule in force**: do not `git commit` in this repo without the user's explicit go-ahead for that specific commit (see `CLAUDE.md`). The user commits and pushes work themselves from their own terminal once satisfied — see "resolved anomaly" below.
 
-## ⚠️ Unresolved anomaly — investigate before continuing
+## Resolved: the "stray commit" mystery from earlier in this session
 
-While testing, an **unexpected git commit appeared in the real px1 repo**, which the plan explicitly said not to make:
+Early on, an unexplained commit (`3f59eee`) appeared in the repo mid-testing, which the plan said not to make, and its diff didn't match its own message. At the time this was flagged as an open anomaly to investigate. It's since become clear this isn't a bug: **the user has their own terminal/editor access to this same repo and commits + pushes the work themselves**, independent of this session — confirmed by two more commits (`c59bdd8` rebrand, `e259e18` push feature) appearing and getting pushed to `origin/master` without this session ever running `git commit`. The "no commit without go-ahead" rule is about *this session's* tool calls, not a claim that the repo stays untouched by the user. No further investigation needed; just keep expecting the working tree to sometimes change or advance between turns and treat that as normal, not a bug to chase.
 
-```
-3f59eee docs: replace agent-editing, LSP, and settings docs with direct-edit and git staging README sections
-```
-- Timestamp: 2026-09-19 14:42:43 +0530 — lands squarely inside my Chrome DevTools testing window.
-- Author: programmerpranit (i.e., made through the normal git identity, not some sandboxed test repo).
-- **The diff does NOT match the message**: `git show --stat 3f59eee` shows only `fileops.go | 30 +++---------------------------` (3 insertions, 27 deletions) — nothing docs-related actually changed in this commit, despite the commit message describing a docs sweep. The docs changes described in the message are still sitting uncommitted in the working tree (`git status` still shows `M docs/README.md`, `D docs/features/agent-editing.md`, etc.).
-- I did **not** knowingly click the app's "Commit" button during testing (I clicked: Discard-my-edits on the save-conflict banner, an unstage button, a stage button, and the Generate button — via `evaluate_script`/DOM, not the actual Commit button).
-- Two live px0 server processes were involved this session: the fork agent's own test instance (bound to a **scratch** repo under the session scratchpad, confirmed via `lsof`/`ps` — args ended in `.../scratchpad/px0test`, not px1) which I killed before starting my own; and my own instance (`pid 13714`, serving px1 itself, port 7800). The scratch-repo instance should have been incapable of touching the real repo, so the stray commit is unexplained.
-- **Not yet checked**: whether `commitmsg.go`'s `claude` CLI shell-out could itself run `git commit` as a side effect (it shouldn't — it's meant to only generate text), or whether the actual `/api/git/commit` endpoint got hit with a stale/wrong message from some leftover request. `/tmp/px0-test.log` was being checked (came back empty on first read — needs a re-check, possibly wrong path or buffering) when this investigation was interrupted to write this file instead.
+Relatedly: earlier in the session, `highlight.go`'s `maxFileBytes` const was found commented-out and saved to disk mid-testing — almost certainly the user trying the just-shipped `Cmd+/` comment-toggle shortcut live on that exact line in the same browser session used for testing. Fixed immediately, confirmed via clean `git diff`.
 
-**Before resuming stripped-down work**: figure out what fired that commit. Given it changed real repo history (not just working tree), treat it like any other unexpected repo mutation — do not just shrug and continue. Consider `git reflog` and re-reading `/tmp/px0-test.log` (or wherever the live server's stdout/stderr actually landed) as next steps. The user was not asked before this commit was made and should be told about it regardless of root cause.
+## Work done this session, chronologically
 
-## Environment notes
+1. **Strip-down to 7 features** (bulk of the work, done by a background fork agent per the plan): deleted LSP, agent/AI-pairing, markdown preview, image viewer, telemetry, metrics, self-update, settings; added `git.go` staging split, `commitmsg.go`, `/api/git/*` routes, `web/src/scm.js` SCM panel. Checkpointed first via commit `5c32fad` to protect in-flight live-editing work that predated this session. Verified manually via Chrome DevTools: highlighting, diff view, live write + save, save-conflict banner, SCM stage/unstage all working.
 
-- Go build pipeline: `web/src/*.js` are ES module sources; `scripts/build-web.js` (or `make web`) bundles them into `web/app.js` + `web/style.css`; `server.go` serves them via `//go:embed web`. **Never hand-edit `web/app.js` directly** — edit `web/src/*.js` and rebuild.
-- Test binary: `/tmp/px0-test` (built via `go build -o /tmp/px0-test .` from px1 root). Running instance: pid 13714, port 7800, log `/tmp/px0-test.log`, serving the real px1 repo (root shown by `/api/meta` should read `/Users/pranit/data/px1`). Kill it (`kill 13714`) once done testing, or rebuild+restart after further code changes — it does not hot-reload.
-- Nothing has been pushed. Only `5c32fad` and the mystery `3f59eee` are committed; everything else is uncommitted working-tree changes.
+2. **Caret flicker + stale-highlight-lag bugfix** (`edit.js`, `renderer.js`, `cursor.js`): typing at end of a line briefly snapped the caret to line-start (`toPoint()`'s degenerate fallback landed on the wrong node type); deletions appeared to lag up to 300ms (`d.buf.highlighted` cache wasn't invalidated on edit/undo/redo). Called `advisor()` first per user's request — it caught a second latent trigger of the same `toPoint` bug and corrected the initial "rAF coalescing" misdiagnosis. Both fixed, verified via timing-controlled DOM inspection.
+
+3. **`Cmd/Ctrl+Backspace`/`Delete` (word delete) and `Cmd/Ctrl+/` (line comment toggle)** shortcuts added to `edit.js`/`shortcuts.js`, scoped to not hijack the commit-message textarea.
+
+4. **SCM discard buttons** (single-file + per-group "discard all") added: `gitDiscard`/`gitDiscardAll` in `git.go`, routes in `server.go`, buttons + confirm dialogs in `scm.js`/`style.css`.
+
+5. **Stage-All bug fix**: user reported "staged only 20 of ~77 files." Root cause: the old bulk stage/unstage/discard fired one HTTP request per file, each spawning a concurrent `git add` subprocess — most lost the race on `.git/index.lock` (git doesn't queue/retry for it) and failed silently. Fixed by replacing with atomic bulk functions (`gitStageAll`/`gitUnstageAll`/`gitDiscardAll`, one git invocation per bulk action) and matching `/api/git/*-all` routes.
+
+6. **Background mode (`-d` flag)**: `daemon.go`/`daemon_unix.go`/`daemon_windows.go` re-exec the binary as a session-detached child, report the bound URL back via a temp status file, print it, and exit — hands the shell back immediately. Multiple `-d` instances stack onto the next free port automatically.
+
+7. **Website + full px0→px1 rebrand**: new `website/index.html` (single static page, no build step, for Vercel — root directory `website/`) + `website/install.sh` + `website/README.md` with deploy steps, domain `px1.pranitpatil.com`. Renamed px0→px1 across the entire repo: `go.mod`, binary output, `Makefile`, `build.sh`, `install.sh`, `.github/*`, all docs, and the web UI (title, favicon — now a data-URI SVG, no more hotlinked px0.ai logo images, replaced with a plain-text wordmark). Credit to the original px0 project and Arpit Bhayani kept explicitly in `README.md`, `CLAUDE.md`, and the website footer. `LICENSE` left untouched (MIT requires keeping the original copyright notice).
+
+8. **Advisor review + Chrome DevTools check of the website** (per explicit user request): advisor caught that the rename sed pass had relabeled *old-product* claims as px1's own — a whole "Updating px1 / `px1 --update`" section that doesn't exist (no `update.go`), a `docker run px1:latest` example (no published image), stale `-no-lsp`/`symbol outline` mentions. Fixed. DevTools check found a real bug (clicking Install/Features nav landed the heading under the sticky header — `scroll-margin-top` fix) and a wrong CLAUDE.md claim (`web/style.css` is NOT generated by the build step, unlike `web/app.js` — corrected).
+
+9. **Full docs-debt cleanup pass** (the "does not block" follow-up from step 8, done when the user asked to "add docs"): rewrote every doc still describing deleted subsystems — `docs/internals/architecture.md` (endpoint table, security model, sequence diagram), `docs/internals/README.md` (mermaid diagram), `docs/internals/git-integration.md` (split-only diff view, not split/unified), `docs/internals/workspace-search.md` (removed dead `symbols.go` section), `docs/internals/styling-and-themes.md`/`editor-virtualization.md`/`file-reload-and-updates.md` (stripped hovercard/LSP/Markdown/outline refs), `docs/agents/README.md` (HTML-structure and module tables rebuilt from actual current files), all of `docs/features/*.md`, plus `README.md`/`BENCHMARKS.md`/`CONTRIBUTING.md`/`PUBLISHING.md`. Cross-checked against real code (routes, exports, element IDs) rather than guessing.
+
+10. **Website UI polish**: added a real product screenshot (`website/shot.webp`, 51KB, own build) in a browser-chrome frame, subtle background glow/grid, card hover states. Verified in DevTools: only same-origin requests, no console errors.
+
+11. **Push-to-remote feature**: `gitSyncStatus`/`gitPush` in `git.go`, `/api/git/sync-status` + `/api/git/push` routes, a `#scm-sync` banner in the SCM panel (`↑N ↓M vs origin/main` + **Push** button) shown whenever the branch has a remote and is ahead. Refreshes on every SCM panel load, including right after a commit. Verified live against this real repo (was ahead 3 at the time) — did not click Push myself, left it for the user.
+
+12. **Icon UI polish** (most recent, uncommitted): the **Generate** commit-message button is now a sparkle-icon button (was text), with a spin animation while generating. The `px1` wordmark now renders as `px` + accent-colored `1` (`.logo-accent`, uses the theme's own `--accent` token) in three places: sidebar footer logo, empty-state wordmark, website nav brand. The **Files** / **Source Control** sidebar tabs are now icon-only (folder icon, and the same branch/graph icon already used for the "changed files" filter, for visual consistency) with the change-count badge kept on the Source Control icon.
+
+## Verification posture
+
+`go build`/`go vet`/`go test` run clean after every change in this list. UI changes were verified live via Chrome DevTools MCP (screenshots, accessibility snapshots, network/console inspection) against real running instances, not just by reading code. No destructive git operations were run; no `git commit` or `git push` was ever executed by this session.

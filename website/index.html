@@ -39,6 +39,7 @@
   }
   header .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; }
   .brand { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-weight: 700; font-size: 17px; color: var(--fg); }
+  .logo-accent { color: var(--accent); }
   .brand .dot { width: 8px; height: 8px; border-radius: 2px; background: var(--accent); display: inline-block; }
   nav.links { display: flex; align-items: center; gap: 20px; font-size: 13.5px; }
   nav.links a { color: var(--dim); }
@@ -159,7 +160,7 @@
 
 <header>
   <div class="wrap">
-    <div class="brand"><span class="dot"></span>px1</div>
+    <div class="brand"><span class="dot"></span>px[<span class="logo-accent">1</span>]</div>
     <nav class="links">
       <a href="#install">Install</a>
       <a href="#features">Features</a>
