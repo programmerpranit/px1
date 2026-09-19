@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-// maxEditBytes bounds what edit mode / save will accept. px0 is a viewer with a
+// maxEditBytes bounds what edit mode / save will accept. px1 is a viewer with a
 // small direct-edit escape hatch, not a general text editor, so this stays well
 // under anything that would make a textarea unpleasant to use.
 const maxEditBytes = 2 << 20 // 2MB
@@ -128,7 +128,7 @@ func (s *Server) handleFileSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dir := filepath.Dir(abs)
-	tmp, err := os.CreateTemp(dir, ".px0-save-*")
+	tmp, err := os.CreateTemp(dir, ".px1-save-*")
 	if err != nil {
 		fail(w, 500, err.Error())
 		return

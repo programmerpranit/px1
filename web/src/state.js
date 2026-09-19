@@ -83,17 +83,10 @@ export const S = {
   selAll: null,       // doc whose whole text is selected (Ctrl+A)
   lastWord: '',
   at: null,           // {word, line, col} of the last click in the code area
-  link: null,         // identifier currently underlined under a held modifier
-  hover: null,        // identifier the hover card is describing
-  hoverAnchor: null,  // where the card was opened, to cheaply detect leaving
-  lsp: { servers: [], state: 'off', server: '' },
   gen: 0,
   chW: 7.8,
   wrap: true,        // word wrap (default ON)
   lineNumbers: true, // line numbers gutter (default ON)
-  mdPreview: true,   // Markdown tabs open rendered (default ON)
-  settings: null,    // loaded from /api/settings
-  agentTargets: [],  // [{ id, path, l1, l2 }, ...] ranges of open compose/edit sessions
 };
 
 export const doc_ = () => (S.active >= 0 ? S.tabs[S.active] : null);

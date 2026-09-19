@@ -3,48 +3,33 @@ import { $, S, api, applyKeyLabels } from './state.js';
 import { measure, layout, render, initRenderer, updateEditorOptionControls } from './renderer.js';
 import { initTabs, openFile, restoreWorkspaceTabs } from './tabs.js';
 import { initCursor } from './cursor.js';
-import { initHover } from './hover.js';
 import { initSelectionBar } from './selbar.js';
-import { drawTree, treeEl, initTree, revealFile, refreshTree, restoreOpenDirs } from './tree.js';
+import { initTree, revealFile, refreshTree, restoreOpenDirs } from './tree.js';
 import { initSearch } from './search.js';
-import { initOutline } from './outline.js';
+import { initScm, loadScmStatus } from './scm.js';
 import { initPanels } from './panels.js';
-import { initInspector } from './inspector.js';
-import { initCalls } from './calls.js';
 import { initFind } from './find.js';
 import { initPalette } from './palette.js';
 import { initShortcuts } from './shortcuts.js';
 import { initTheme } from './theme.js';
-import { initMarkdown } from './markdown.js';
 import { initDiff } from './diff.js';
-import { initAgent, applyAgentMeta, loadAgentAsync } from './agent.js';
-import { initMetrics, initStatusFit, updateMetricsDisplay, updateStatus } from './status.js';
-import { initSettings } from './settings.js';
-import { initImageViewer } from './imageview.js';
+import { initStatusFit, updateStatus } from './status.js';
 import { initEdit } from './edit.js';
 
 // Initialize all subsystems
 initRenderer();
 initTabs();
 initCursor();
-initHover();
 initSelectionBar();
 initTree();
 initSearch();
-initOutline();
+initScm();
 initPanels();
-initInspector();
-initCalls();
 initFind();
 initPalette();
 initShortcuts();
-initMarkdown();
 initDiff();
-initAgent();
-initMetrics();
 initStatusFit();
-initSettings();
-initImageViewer();
 initEdit();
 
 // Bootstrap application lifecycle
@@ -53,17 +38,13 @@ initEdit();
     initTheme();
 
     // Restore word wrap (default ON)
-    const wrapPref = localStorage.getItem('px0.wrap');
+    const wrapPref = localStorage.getItem('px1.wrap');
     S.wrap = wrapPref !== null ? wrapPref === 'true' : true;
     document.body.classList.toggle('word-wrap', S.wrap);
 
     // Line numbers are always ON
     S.lineNumbers = true;
     document.body.classList.remove('hide-lines');
-
-    // Restore Markdown preview (default ON)
-    const mdPref = localStorage.getItem('px0.mdPreview');
-    S.mdPreview = mdPref !== null ? mdPref === 'true' : true;
 
     updateEditorOptionControls();
   } catch {}
@@ -72,10 +53,8 @@ initEdit();
 
   measure();
   S.meta = await api('/api/meta');
-  if (S.meta.metrics) updateMetricsDisplay(S.meta.metrics);
-  if (S.meta.git) { const b = $('#btn-changed'); if (b) b.hidden = false; }
-  applyAgentMeta();
-  document.title = S.meta.name + ' - px0';
+  if (S.meta.git) { const b = $('#btn-changed'); if (b) b.hidden = false; loadScmStatus(); }
+  document.title = S.meta.name + ' - px1';
   $('#root-name').textContent = S.meta.name;
   $('#root-name').title = S.meta.root;
   if (S.meta.version) {
@@ -83,7 +62,7 @@ initEdit();
     if (emptyVerEl) emptyVerEl.textContent = 'v' + S.meta.version;
   }
   try {
-    const savedDirs = JSON.parse(sessionStorage.getItem('px0.openDirs') || '[]');
+    const savedDirs = JSON.parse(sessionStorage.getItem('px1.openDirs') || '[]');
     restoreOpenDirs(savedDirs);
   } catch {}
   await refreshTree();
@@ -126,7 +105,4 @@ initEdit();
       }
     }, 150);
   }
-
-  // Load harnesses and models asynchronously after the browser is loaded.
-  loadAgentAsync();
 })();

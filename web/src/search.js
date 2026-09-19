@@ -1,7 +1,8 @@
 // web/src/search.js
 import { $, $$, esc, api, debounce } from './state.js';
 import { openFile } from './tabs.js';
-import { flashFind } from './lsp.js';
+import { flashFind } from './find.js';
+import { layout, render } from './renderer.js';
 
 export const resultsEl = $('#results');
 export let lastResults = null;
@@ -85,7 +86,43 @@ export function displayPath(p) {
   return '…/' + parts.slice(-3).join('/');
 }
 
+/* The right-side panel holds only the workspace-search pane, so showing it
+   is just a visibility toggle -- no tab switching. */
+export function showSearchPanel() {
+  document.body.classList.remove('right-hidden');
+  layout();
+  render();
+  $('#q')?.focus();
+}
+
+export function hideSearchPanel() {
+  cancelSearch();
+  document.body.classList.add('right-hidden');
+  layout();
+  render();
+}
+
+export function toggleSearchPanel() {
+  if (document.body.classList.contains('right-hidden')) showSearchPanel();
+  else hideSearchPanel();
+}
+
+function initSearchPanel() {
+  $('#btn-close-right')?.addEventListener('click', hideSearchPanel);
+  const rrz = $('#right-resizer');
+  if (!rrz) return;
+  let dragging = false;
+  rrz.addEventListener('mousedown', e => { dragging = true; rrz.classList.add('drag'); e.preventDefault(); });
+  addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const w = Math.max(200, Math.min(700, window.innerWidth - e.clientX));
+    $('#right-side').style.width = w + 'px';
+  });
+  addEventListener('mouseup', () => { if (dragging) { dragging = false; rrz.classList.remove('drag'); layout(); render(); } });
+}
+
 export function initSearch() {
+  initSearchPanel();
   if (!resultsEl) return;
   resultsEl.addEventListener('click', e => {
     const t = e.target.closest('[data-toggle]');

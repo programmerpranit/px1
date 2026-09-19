@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -44,7 +45,7 @@ func TestIgnorePatterns(t *testing.T) {
 func TestFuzzyRanking(t *testing.T) {
 	paths := []string{
 		"internal/server/http_server.go",
-		"cmd/px0/main.go",
+		"cmd/px1/main.go",
 		"web/app.js",
 		"pkg/util/strings.go",
 		"vendor/github.com/x/http/server.go",
@@ -110,13 +111,29 @@ func newTestServer(t *testing.T) (*Server, string) {
 
 	ix := NewIndex(root)
 	ix.Build()
-	return NewServer(ix, nil), root
+	return NewServer(ix), root
 }
 
 func get(t *testing.T, s *Server, url string) (int, map[string]any) {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+	var m map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &m)
+	return rec.Code, m
+}
+
+// postJSON issues a POST that satisfies localPost (same-origin, IP/localhost
+// Host) so handlers gated behind it can be exercised directly.
+func postJSON(t *testing.T, s *Server, url string, body any) (int, map[string]any) {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "127.0.0.1:7777"
+	req.Header.Set("Origin", "http://127.0.0.1:7777")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
 	var m map[string]any
 	json.Unmarshal(rec.Body.Bytes(), &m)
 	return rec.Code, m
@@ -180,7 +197,7 @@ func TestTreeListsIgnoredEntries(t *testing.T) {
 	os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
 	ix := NewIndex(root)
 	ix.Build()
-	s := NewServer(ix, nil)
+	s := NewServer(ix)
 
 	entries := func(url string) (int, map[string]map[string]any) {
 		code, body := get(t, s, url)
@@ -234,7 +251,6 @@ func TestPathTraversalRefused(t *testing.T) {
 		"/api/file?path=../../../etc/passwd",
 		"/api/file?path=/etc/passwd",
 		"/api/file?path=sub/../../outside",
-		"/api/outline?path=..%2F..%2Fetc%2Fpasswd",
 	} {
 		code, body := get(t, s, bad)
 		if code == http.StatusOK {
@@ -243,7 +259,7 @@ func TestPathTraversalRefused(t *testing.T) {
 	}
 }
 
-func TestFileAndSearchAndDef(t *testing.T) {
+func TestFileAndSearch(t *testing.T) {
 	s, _ := newTestServer(t)
 
 	code, body := get(t, s, "/api/file?path=greet.go")
@@ -265,29 +281,6 @@ func TestFileAndSearchAndDef(t *testing.T) {
 	if int(body["files"].(float64)) != 2 {
 		t.Errorf("search hit %v files, want 2", body["files"])
 	}
-
-	// The declaration, not the call site, must come back as the definition.
-	code, body = get(t, s, "/api/def?sym=greet")
-	if code != http.StatusOK {
-		t.Fatalf("def: %d", code)
-	}
-	defs := body["defs"].([]any)
-	if len(defs) != 1 {
-		t.Fatalf("got %d definitions, want 1: %v", len(defs), defs)
-	}
-	d := defs[0].(map[string]any)
-	if d["path"] != "greet.go" || int(d["line"].(float64)) != 5 {
-		t.Errorf("definition at %v:%v, want greet.go:5", d["path"], d["line"])
-	}
-
-	code, body = get(t, s, "/api/outline?path=sub/deep.py")
-	if code != http.StatusOK {
-		t.Fatalf("outline: %d", code)
-	}
-	syms := body["symbols"].([]any)
-	if len(syms) != 1 || syms[0].(map[string]any)["name"] != "handler" {
-		t.Errorf("outline = %v, want one symbol named handler", syms)
-	}
 }
 
 func TestChunkedReadsCoverWholeFile(t *testing.T) {
@@ -301,7 +294,7 @@ func TestChunkedReadsCoverWholeFile(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "big.go"), []byte(sb.String()), 0o644)
 	ix := NewIndex(root)
 	ix.Build()
-	s := NewServer(ix, nil)
+	s := NewServer(ix)
 
 	var all []string
 	for start := 0; ; start += hlChunk {
@@ -433,7 +426,7 @@ func TestCaseInsensitiveOffsetsWithUnicode(t *testing.T) {
 	}
 	ix := NewIndex(root)
 	ix.Build()
-	s := NewServer(ix, nil)
+	s := NewServer(ix)
 
 	code, out := get(t, s, "/api/search?q=finduser")
 	if code != http.StatusOK {

@@ -1,32 +1,15 @@
 // web/src/diff.js
 // Git diff view for the active tab: renders the file's unified diff against
-// HEAD in a dedicated overlay (like the Markdown preview), in either a
-// side-by-side split layout (default) or a single-column unified layout.
+// HEAD in a dedicated overlay, as a side-by-side split layout.
 // Unlike the code viewport this is not virtualized -- a file's own diff is
 // bounded in size, so a plain DOM render is simple and fast enough.
 import { $, S, doc_, esc, api } from './state.js';
-import { syncPreview } from './markdown.js';
 import { setStatusNote, updateStatus } from './status.js';
 
 export const diffview = $('#diffview');
 const diffContent = $('#diffcontent');
 
 let shown = null; // doc the diff view is currently showing, null while hidden
-
-// d.diffMode is 'split' | 'unified' | null (off), per tab. The layout last
-// picked (split vs unified) is remembered globally as the default for the
-// next file entering diff view.
-export function setLayoutPref(mode) {
-  try { localStorage.setItem('px0.diffLayout', mode); } catch {}
-}
-
-export function layoutPref() {
-  try { return localStorage.getItem('px0.diffLayout') || 'split'; } catch { return 'split'; }
-}
-
-function diffMode(d = doc_()) {
-  return (d && d.diffMode) || null;
-}
 
 /* Show or hide the diff overlay to match the active tab, and re-render when
    the layout (split/unified) changes while already showing the same doc --
@@ -59,7 +42,7 @@ export async function toggleDiff() {
   const d = doc_();
   if (!d) return;
   if (!d.diffMode && !d.diffAvailable) { setStatusNote('No diff — clean file or not a git repo', 4000); return; }
-  setDiffMode(d.diffMode ? 'source' : (layoutPref() || 'split'));
+  setDiffMode(d.diffMode ? 'source' : 'split');
 }
 
 export async function setDiffMode(mode) {
@@ -70,11 +53,9 @@ export async function setDiffMode(mode) {
     d.diffMode = null;
     d.diffDismissed = true;
   } else {
-    d.diffMode = mode;
+    d.diffMode = 'split';
     d.diffDismissed = false;
-    setLayoutPref(mode);
   }
-  syncPreview(); // markdown preview and diff view are mutually exclusive
   syncDiffView();
   updateStatus();
 }
@@ -115,24 +96,9 @@ function renderDiff(d) {
   const frag = document.createDocumentFragment();
   for (const hunk of d.diffHunks) {
     frag.append(hunkHeader(hunk));
-    frag.append(d.diffMode === 'unified' ? unifiedTable(hunk) : splitTable(hunk));
+    frag.append(splitTable(hunk));
   }
   diffContent.append(frag);
-  syncDiffAgentTargets();
-}
-
-export function syncDiffAgentTargets() {
-  if (!diffview || diffview.hidden) return;
-  const d = doc_();
-  if (!d) return;
-  const ranges = (S.agentTargets || []).filter(t => t.path === d.path);
-  for (const el of diffview.querySelectorAll('[data-l]')) {
-    const l = +el.dataset.l;
-    const inAgent = ranges.some(r => l >= r.l1 && l <= r.l2);
-    const isAnchor = ranges.some(r => l === r.l1);
-    el.classList.toggle('agent-sel', inAgent);
-    el.classList.toggle('agent-anchor', isAnchor);
-  }
 }
 
 function hunkHeader(hunk) {
@@ -171,26 +137,6 @@ function parseDiff(text) {
     else cur.rows.push({ type: 'ctx', oldLine: oldLine++, newLine: newLine++, text: body });
   }
   return hunks;
-}
-
-/* ---------- unified layout: one row per diff line ---------- */
-
-function unifiedTable(hunk) {
-  const table = document.createElement('div');
-  table.className = 'diff-table diff-unified';
-  for (const row of hunk.rows) {
-    const r = document.createElement('div');
-    r.className = 'diff-row diff-' + row.type;
-    anchor(r, row);
-    r.append(
-      lineCell(row.type === 'add' ? '' : row.oldLine),
-      lineCell(row.type === 'del' ? '' : row.newLine),
-      markerCell(row.type),
-      codeCell(row.text),
-    );
-    table.append(r);
-  }
-  return table;
 }
 
 /* ---------- split layout: deletions and additions paired side by side ---------- */
@@ -280,16 +226,6 @@ export function initDiff() {
   });
   $('#diff-btn')?.addEventListener('click', e => {
     e.stopPropagation();
-    setDiffMode(doc_()?.diffMode || layoutPref());
+    setDiffMode(doc_()?.diffMode || 'split');
   });
-  const menu = $('#diff-menu');
-  if (menu) {
-    menu.addEventListener('click', e => {
-      const item = e.target.closest('[data-diff-opt]');
-      if (!item) return;
-      e.stopPropagation();
-      setDiffMode(item.dataset.diffOpt);
-      item.blur();
-    });
-  }
 }

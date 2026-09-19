@@ -122,7 +122,7 @@ func TestGitDiff(t *testing.T) {
 	root := gitRepo(t)
 	ix := NewIndex(root)
 	ix.Build()
-	s := NewServer(ix, nil)
+	s := NewServer(ix)
 
 	code, body := get(t, s, "/api/diff?path=sub/mod.go")
 	if code != 200 {
@@ -171,7 +171,7 @@ func TestGitDisabled(t *testing.T) {
 			t.Errorf("node %q has status %q with -no-git", k.Name, k.Status)
 		}
 	}
-	s := NewServer(ix, nil)
+	s := NewServer(ix)
 	_, body := get(t, s, "/api/diff?path=sub/mod.go")
 	if body["available"] != false {
 		t.Errorf("diff available = %v with -no-git, want false", body["available"])
@@ -221,7 +221,7 @@ func TestGitGutter(t *testing.T) {
 
 	ix := NewIndex(root)
 	ix.Build()
-	s := NewServer(ix, nil)
+	s := NewServer(ix)
 
 	ints := func(body map[string]any, key string) []int {
 		var out []int
@@ -273,6 +273,122 @@ func TestGitGutter(t *testing.T) {
 	_, cleanBody := get(t, s, "/api/file?path=clean.go")
 	if cleanBody["diffAvailable"] != false {
 		t.Errorf("clean.go diffAvailable = %v, want false", cleanBody["diffAvailable"])
+	}
+}
+
+func TestGitStageUnstageCommit(t *testing.T) {
+	if !gitInstalled() {
+		t.Skip("git not installed")
+	}
+	root := gitRepo(t)
+	ix := NewIndex(root)
+	ix.Build()
+	s := NewServer(ix)
+
+	// Status splits staged (add.go, staged by gitRepo) from unstaged
+	// (sub/mod.go modified, untr.go untracked) sides of the same listing.
+	code, body := get(t, s, "/api/git/status")
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	files, _ := body["files"].([]any)
+	byPath := map[string]map[string]any{}
+	for _, f := range files {
+		m := f.(map[string]any)
+		byPath[m["path"].(string)] = m
+	}
+	if byPath["add.go"]["staged"] != "A" {
+		t.Errorf("add.go staged = %v, want A", byPath["add.go"]["staged"])
+	}
+	if byPath["sub/mod.go"]["unstaged"] != "M" {
+		t.Errorf("sub/mod.go unstaged = %v, want M", byPath["sub/mod.go"]["unstaged"])
+	}
+	if byPath["untr.go"]["unstaged"] != "U" || byPath["untr.go"]["staged"] != "" {
+		t.Errorf("untr.go = %v, want staged=\"\" unstaged=U", byPath["untr.go"])
+	}
+
+	// Stage the untracked file.
+	code, _ = postJSON(t, s, "/api/git/stage?path=untr.go", nil)
+	if code != 200 {
+		t.Fatalf("stage status %d", code)
+	}
+	_, body = get(t, s, "/api/git/status")
+	files, _ = body["files"].([]any)
+	found := false
+	for _, f := range files {
+		m := f.(map[string]any)
+		if m["path"] == "untr.go" {
+			found = true
+			if m["staged"] != "A" {
+				t.Errorf("untr.go staged = %v, want A after stage", m["staged"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("untr.go missing from status after stage")
+	}
+
+	// Unstage add.go back out of the index.
+	code, _ = postJSON(t, s, "/api/git/unstage?path=add.go", nil)
+	if code != 200 {
+		t.Fatalf("unstage status %d", code)
+	}
+	_, body = get(t, s, "/api/git/status")
+	files, _ = body["files"].([]any)
+	for _, f := range files {
+		m := f.(map[string]any)
+		if m["path"] == "add.go" && m["staged"] != "" {
+			t.Errorf("add.go staged = %v, want empty after unstage", m["staged"])
+		}
+	}
+
+	// Commit whatever is currently staged (untr.go).
+	code, body = postJSON(t, s, "/api/git/commit", map[string]any{"message": "stage untr.go"})
+	if code != 200 {
+		t.Fatalf("commit status %d (%v)", code, body)
+	}
+	out, err := exec.Command("git", "-C", root, "log", "-1", "--format=%s").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "stage untr.go" {
+		t.Errorf("last commit subject = %q, want %q", got, "stage untr.go")
+	}
+}
+
+func TestGitUnstageNoCommitsYet(t *testing.T) {
+	if !gitInstalled() {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "new.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("init")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "T")
+	run("add", "new.go")
+
+	// No HEAD exists yet: unstaging must fall back to `git rm --cached`.
+	if err := gitUnstage(root, "new.go"); err != nil {
+		t.Fatalf("gitUnstage with no commits: %v", err)
+	}
+	st := gitStatusXY(root)
+	for _, f := range st {
+		if f.Path == "new.go" && f.Staged != "" {
+			t.Errorf("new.go staged = %q, want empty after unstage", f.Staged)
+		}
 	}
 }
 

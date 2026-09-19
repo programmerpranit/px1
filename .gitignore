@@ -1,6 +1,6 @@
 dist/
 bench-repos/
-px0
+px1
 *.test
 *.prof
 
@@ -21,4 +21,4 @@ build/
 
 # Logs
 *.log
-px0
+px1

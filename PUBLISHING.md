@@ -1,12 +1,12 @@
 # Publishing & Release Guide
 
-This document outlines the step-by-step instructions for preparing, testing, and publishing a new release of `px0`.
+This document outlines the step-by-step instructions for preparing, testing, and publishing a new release of `px1`.
 
 ## 1. Prerequisites
 
 Before cutting a new release, ensure you have:
 
-- Git with push and tag permissions for `px0-ai/px0`.
+- Git with push and tag permissions for `programmerpranit/px1`.
 - Go (version 1.24+).
 - Node.js (v18+ or v20+) or Bun for bundling frontend assets.
 - A clean working tree with all tests passing.
@@ -21,7 +21,7 @@ make test
 
 # 2. Build local binary and verify sanity
 make build
-./px0 --version
+./px1 --version
 ```
 
 ## 3. Release Methods
@@ -71,7 +71,7 @@ git push origin v0.2.0
 
 ### Method 3: GitHub Actions Workflow Dispatch
 
-1. Navigate to Actions -> Release on GitHub: `https://github.com/px0-ai/px0/actions/workflows/release.yml`
+1. Navigate to Actions -> Release on GitHub: `https://github.com/programmerpranit/px1/actions/workflows/release.yml`
 1. Click Run workflow.
 1. Enter the version tag (e.g. `v0.2.0`).
 1. Trigger the workflow.
@@ -79,12 +79,9 @@ git push origin v0.2.0
 ## 4. Post-Release Verification
 
 1. Verify GitHub Actions workflow completion on the Actions tab.
-1. Confirm artifacts on the [Releases](https://github.com/px0-ai/px0/releases) page (cross-platform binaries and `checksums.txt`). The self-updater requires this file and verifies the selected binary against it before execution.
+1. Confirm artifacts on the [Releases](https://github.com/programmerpranit/px1/releases) page (cross-platform binaries and `checksums.txt`, published for users who want to verify a download by hand — px1 has no self-updater and does not check it itself).
 1. Verify the installer script:
   ```bash
-  curl -fsSL https://px0.ai/install.sh | sh
-  ```
-1. Verify self-update functionality:
-  ```bash
-  px0 --update
+  curl -fsSL https://px1.pranitpatil.com/install.sh | sh
+  px1 -version
   ```

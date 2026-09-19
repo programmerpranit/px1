@@ -2,7 +2,7 @@
 import { $, $$, esc, api, S, apiPostJson } from './state.js';
 import { openFile } from './tabs.js';
 import { showToast } from './ui.js';
-import { reloadWorkspace } from './agent.js';
+import { reindexWorkspace } from './panels.js';
 
 export const treeEl = $('#tree');
 export const openDirs = new Set();
@@ -102,7 +102,7 @@ export async function revealDir(dir) {
   const last = treeEl.querySelector('[data-dir="' + CSS.escape(dir) + '"]');
   if (last) last.scrollIntoView({ block: 'center' });
   try {
-    sessionStorage.setItem('px0.openDirs', JSON.stringify(Array.from(openDirs)));
+    sessionStorage.setItem('px1.openDirs', JSON.stringify(Array.from(openDirs)));
   } catch {}
 }
 
@@ -179,7 +179,7 @@ function startRename(row) {
       const t = S.tabs.find(t => t.path === path);
       if (t) { t.path = newPath; t.name = newName; }
       showToast('✓', 'Renamed');
-      await reloadWorkspace();
+      await reindexWorkspace();
     } catch (e) {
       showToast('!', 'Rename failed: ' + e.message);
       nameEl.textContent = oldName;
@@ -215,7 +215,7 @@ export function initTree() {
         await drawTree(path, kids, path.split('/').length);
       } else openDirs.delete(path);
       try {
-        sessionStorage.setItem('px0.openDirs', JSON.stringify(Array.from(openDirs)));
+        sessionStorage.setItem('px1.openDirs', JSON.stringify(Array.from(openDirs)));
       } catch {}
       return;
     }

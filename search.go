@@ -24,7 +24,6 @@ type Match struct {
 	Pre  string `json:"pre"`
 	Mid  string `json:"mid"`
 	Post string `json:"post"`
-	Def  bool   `json:"def,omitempty"` // line looks like a declaration
 }
 
 const (
@@ -72,18 +71,15 @@ type SearchOpts struct {
 	Glob      string
 	MaxFiles  int
 	MaxPerFil int
-	// classifyDefs marks hits whose line looks like a declaration of Query.
-	classifyDefs bool
 }
 
 const searchFileCap = 8 << 20 // do not grep blobs
 
 type searcher struct {
-	opts   SearchOpts
-	re     *regexp.Regexp            // nil for the literal fast path
-	lit    []byte                    // literal needle, already case-folded if needed
-	glob   *rule                     // path filter, nil when every file is in scope
-	defRes map[string]*regexp.Regexp // ext -> declaration pattern for Query
+	opts SearchOpts
+	re   *regexp.Regexp // nil for the literal fast path
+	lit  []byte         // literal needle, already case-folded if needed
+	glob *rule          // path filter, nil when every file is in scope
 }
 
 func newSearcher(o SearchOpts) (*searcher, error) {
@@ -117,9 +113,6 @@ func newSearcher(o SearchOpts) (*searcher, error) {
 			n = asciiLowerString(n)
 		}
 		s.lit = []byte(n)
-	}
-	if o.classifyDefs {
-		s.defRes = declPatterns(o.Query)
 	}
 	return s, nil
 }
@@ -217,7 +210,6 @@ func (s *searcher) scan(data []byte, ext string, max int, w *workBuf) []Match {
 
 	var out []Match
 	lineNo, start := 1, 0
-	defRe := s.defRes[ext]
 	for start <= len(data) {
 		end := bytes.IndexByte(data[start:], '\n')
 		var lineEnd int
@@ -245,10 +237,9 @@ func (s *searcher) scan(data []byte, ext string, max int, w *workBuf) []Match {
 			}
 		}
 		if len(locs) > 0 {
-			isDef := defRe != nil && defRe.Match(line)
 			for _, l := range locs {
 				m := snip(line, l[0], l[1])
-				m.Line, m.Def = lineNo, isDef
+				m.Line = lineNo
 				out = append(out, m)
 				if len(out) >= max {
 					return out

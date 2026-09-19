@@ -56,7 +56,7 @@ func TestHandleSearchWithCanceledRequest(t *testing.T) {
 	}
 	ix := NewIndex(root)
 	ix.Build()
-	s := NewServer(ix, nil)
+	s := NewServer(ix)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/search?q=Hello", nil)
 	ctx, cancel := context.WithCancel(req.Context())

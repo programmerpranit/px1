@@ -1,7 +1,7 @@
 // web/src/renderer.js
 import { $, S, doc_, api, esc, LH, CHUNK, OVERSCAN } from './state.js';
 import { vp, sizer, rowsEl, editor } from './ui.js';
-import { lineText } from './cursor.js';
+import { lineText, revealCaretX } from './cursor.js';
 
 export function measure() {
   const m = $('#measure');
@@ -24,7 +24,7 @@ export function layout() {
 export function toggleWordWrap(forced) {
   S.wrap = typeof forced === 'boolean' ? forced : !S.wrap;
   document.body.classList.toggle('word-wrap', S.wrap);
-  try { localStorage.setItem('px0.wrap', S.wrap ? 'true' : 'false'); } catch {}
+  try { localStorage.setItem('px1.wrap', S.wrap ? 'true' : 'false'); } catch {}
   updateEditorOptionControls();
   layout();
   render();
@@ -73,14 +73,11 @@ export function paint() {
 
   let html = '';
   const gut = d.gutter || null;
-  const agentRanges = (S.agentTargets || []).filter(t => t.path === d.path);
   for (let i = first; i < last; i++) {
     const n = i + 1;
     const body = d.buf ? (d.buf.highlighted[i] ?? esc(d.buf.lines[i] ?? '')) : d.lines[i];
     let rc = 'row', gc = 'g';
     if (n === d.cur) rc += ' cur';
-    if (agentRanges.some(r => n >= r.l1 && n <= r.l2)) rc += ' agent-sel';
-    if (agentRanges.some(r => n === r.l1)) rc += ' agent-anchor';
     if (gut) {
       const m = gut.marks.get(n);
       if (m) gc += m === 'add' ? ' gut-add' : ' gut-mod';
@@ -95,7 +92,11 @@ export function paint() {
   rowsEl.classList.toggle('all', S.selAll === d);
   decorate(first, last);
   if (sel) restoreSelection(sel);
-  placeCaret();
+  const x = placeCaret();
+  // An edit asks the next real paint (this one) to scroll the caret into
+  // view horizontally, once the DOM actually reflects it -- doing it
+  // synchronously in afterEdit() would measure against the pre-edit DOM.
+  if (d.buf && d.buf.revealPending) { d.buf.revealPending = false; revealCaretX(x); }
 }
 
 let caretKey = '';
@@ -192,13 +193,18 @@ export function toPoint({ line, col }) {
   if (!row) return null;
   const code = $('.c', row);
   const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
-  let at = 0;
+  let at = 0, last = null;
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     const len = n.nodeValue.length;
     if (col <= at + len) return [n, col - at];
     at += len;
+    last = n;
   }
-  return [code, code.childNodes.length];
+  // col overshot every text node -- the DOM is a keystroke behind the
+  // buffer (edit not yet painted). Land at the end of what is actually
+  // rendered rather than falling into the element branch, which measures
+  // to the start of the line.
+  return last ? [last, last.nodeValue.length] : [code, code.childNodes.length];
 }
 
 /* Decorations are applied to the ~60 live rows only, never to the whole file. */
@@ -206,10 +212,6 @@ export function decorate(first, last) {
   const d = doc_();
   if (S.occ) {
     for (const row of rowsEl.children) markNodes($('.c', row), S.occ, true, 'occ');
-  }
-  if (S.link) {
-    const row = rowFor(S.link.line);
-    if (row) wrapRange($('.c', row), S.link.col, S.link.col + S.link.word.length, 'link');
   }
   if (S.find && S.find.hits.length) {
     const byLine = S.find.byLine;
@@ -251,36 +253,6 @@ export function markNodes(el, needle, caseSensitive, cls) {
     }
     if (at < raw.length) frag.appendChild(document.createTextNode(raw.slice(at)));
     node.parentNode.replaceChild(frag, node);
-  }
-  return out;
-}
-
-/* Wrap the half-open character range [from, to) of el in a span. Unlike the
-   needle search used for find, this targets one exact occurrence, which is what
-   a position-based decoration needs. */
-export function wrapRange(el, from, to, cls) {
-  if (!el || to <= from) return null;
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  const nodes = [];
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
-  let at = 0, out = null;
-  for (const node of nodes) {
-    const len = node.nodeValue.length;
-    const s = Math.max(from, at), e = Math.min(to, at + len);
-    if (s < e) {
-      const a = s - at, b = e - at;
-      const span = document.createElement('span');
-      span.className = cls;
-      span.textContent = node.nodeValue.slice(a, b);
-      const frag = document.createDocumentFragment();
-      if (a > 0) frag.appendChild(document.createTextNode(node.nodeValue.slice(0, a)));
-      frag.appendChild(span);
-      if (b < len) frag.appendChild(document.createTextNode(node.nodeValue.slice(b)));
-      node.parentNode.replaceChild(frag, node);
-      out = out || span;
-    }
-    at += len;
-    if (at >= to) break;
   }
   return out;
 }

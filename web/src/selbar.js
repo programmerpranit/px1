@@ -2,7 +2,6 @@
 import { $, S, doc_, keyLabel } from './state.js';
 import { vp, copyToClipboard, showToast } from './ui.js';
 import { render } from './renderer.js';
-import { findReferences } from './lsp.js';
 import { fitStatus } from './status.js';
 
 /* While code is selected, the left of the status bar trades its navigation
@@ -15,13 +14,7 @@ const statsEl = $('#sel-stats');
 const diffviewEl = $('#diffview');
 
 // e.code, not e.key: Option+letter types a symbol on macOS.
-export const SEL_KEYS = { KeyC: 'copy-ref', KeyA: 'copy-agent', KeyU: 'usages', KeyE: 'agent-edit' };
-
-/* Editing lives in agent.js, which registers itself here on load. Keeping the
-   dependency one-way means selbar imports nothing back and the two never form
-   a cycle; the button simply does nothing when no harness is configured. */
-let agentHandler = null;
-export function setAgentHandler(fn) { agentHandler = fn; }
+export const SEL_KEYS = { KeyC: 'copy-ref', KeyA: 'copy-agent' };
 
 let current = null;   // the selection the bar is showing, or null when it is not
 let allText = null;   // Ctrl+A: promise of the S.selAll file's full text
@@ -164,18 +157,7 @@ export function copySelectAll() {
 /* Runs one of the bar's actions on the current selection. Returns false when the
    bar is not showing, so a shortcut can fall through to the browser. */
 export function runSelectionAction(act) {
-  if (!current) {
-    if (act === 'agent-edit') {
-      const d = doc_();
-      if (d && agentHandler) {
-        const line = d.cur || 1;
-        const text = (d.lines && d.lines[line - 1]) || '';
-        agentHandler({ text, l1: line, l2: line, path: d.path });
-        return true;
-      }
-    }
-    return false;
-  }
+  if (!current) return false;
   const { text, path } = current;
   const ref = selectionRef(current);
   if (act === 'copy-ref') {
@@ -185,11 +167,6 @@ export function runSelectionAction(act) {
     const lineStr = current.l1 === current.l2 ? 'line ' + current.l1 : 'lines ' + current.l1 + '-' + current.l2;
     const snippet = '@' + path + ' ' + lineStr + '\n```' + ext + '\n' + text + '\n```';
     copyToClipboard(snippet, 'Copied');
-  } else if (act === 'agent-edit') {
-    if (!agentHandler) return false;
-    agentHandler(current);
-  } else if (act === 'usages') {
-    findReferences(text.split(/\s+/)[0] || text);
   } else {
     return false;
   }
@@ -207,8 +184,6 @@ export function closeSelMenu() {
 const SEL_MENU_ITEMS = [
   { sel: 'copy-ref', label: 'Copy Ref', keys: 'Alt+C' },
   { sel: 'copy-agent', label: 'Copy with Context', keys: 'Alt+A' },
-  { sel: 'agent-edit', label: 'Edit Inline', keys: 'Alt+E' },
-  { sel: 'usages', label: 'Find Usages', keys: 'Alt+U' },
 ];
 
 /* Built from the selection actions each time, keeping Find Usages in context menu. */

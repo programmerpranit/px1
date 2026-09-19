@@ -1,10 +1,8 @@
 // web/src/cursor.js
-import { $, S, doc_, MOD, LH } from './state.js';
+import { $, S, doc_, LH } from './state.js';
 import { vp, rowsEl } from './ui.js';
 import { paint, render, rowFor, placeCaret, toPoint } from './renderer.js';
 import { updateStatus } from './status.js';
-import { gotoDefinition } from './lsp.js';
-import { pushHistory } from './history.js';
 
 export const WORD = /[A-Za-z0-9_$]/;
 
@@ -241,16 +239,8 @@ export function initCursor() {
     placeCaret(); // no repaint here: rewriting rows would break the drag that starts a selection
     updateStatus();
     const w = wordAtPoint(e.clientX, e.clientY);
-    // The clicked identifier is what F12, Shift+F12 and Alt+Shift+H act on.
     S.at = w;
     if (w) S.lastWord = w.word;
-    if (e[MOD] && w) {
-      e.preventDefault();
-      S.at = w; S.lastWord = w.word;
-      pushHistory(d.path, d.cur); // so Alt+Left returns to the call site
-      gotoDefinition(w);
-      return;
-    }
     for (const r of rowsEl.children) r.classList.toggle('cur', +r.dataset.l === d.cur);
   });
 

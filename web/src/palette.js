@@ -6,14 +6,11 @@ import { updateStatus } from './status.js';
 import { pushHistory } from './history.js';
 import { showPanel } from './panels.js';
 import { openFind } from './find.js';
-import { gotoDefinition, findReferences } from './lsp.js';
+import { showSearchPanel } from './search.js';
+import { showScm } from './scm.js';
 import { revealFile } from './tree.js';
-import { showRightInspector, hideRightInspector } from './inspector.js';
-import { showCalls, openLspSetup } from './calls.js';
 import { showHelp } from './shortcuts.js';
 import { listThemes, currentTheme, setTheme, cycleTheme } from './theme.js';
-import { togglePreview } from './markdown.js';
-import { openSettings } from './settings.js';
 
 export const overlay = $('#overlay');
 export const palInput = $('#pal');
@@ -21,25 +18,13 @@ export const palList = $('#pal-list');
 export let pal = null;
 
 export const COMMANDS = [
-  { name: withKeys('Preferences: Open Settings (UI) ({Mod+,})'), run: () => openSettings('ui') },
-  { name: 'Preferences: Open Settings (JSON)', run: () => openSettings('json') },
   { name: 'Go to File…', run: () => openPalette('file') },
-  { name: 'Go to Symbol in File…', run: () => openPalette('symbol') },
   { name: 'Go to Line…', run: () => openPalette('line') },
-  { name: 'Search in Files', run: () => showRightInspector('search') },
+  { name: 'Search in Files', run: () => showSearchPanel() },
+  { name: 'Source Control: Show', run: () => showScm() },
   { name: 'Find in Current File', run: () => openFind(S.lastWord) },
-  { name: 'Go to Definition', run: () => gotoDefinition() },
-  { name: 'Find All References (Right Panel)', run: () => findReferences() },
-  { name: withKeys('Show Call Trail: Callers / Callees ({Alt+Shift+H})'), run: () => showCalls() },
-  { name: 'Set Up Language Server…', run: () => openLspSetup() },
-  { name: 'Toggle Right Inspector (Symbols & References)', run: () => {
-    if (document.body.classList.contains('right-hidden')) showRightInspector('refs');
-    else hideRightInspector();
-  } },
-  { name: 'Show File Symbols (Right Panel)', run: () => showRightInspector('symbols') },
   { name: 'Reveal Active File in Explorer', run: () => { const d = doc_(); if (d) { showPanel('files'); revealFile(d.path); } } },
   { name: withKeys('Toggle Word Wrap ({Alt+Z})'), run: () => toggleWordWrap() },
-  { name: withKeys('Toggle Markdown Preview ({Alt+M})'), run: () => togglePreview() },
   { name: withKeys('Toggle Sidebar ({Mod+B})'), run: () => document.body.classList.toggle('side-hidden') },
   { name: 'Select Theme…', run: () => openPalette('theme') },
   { name: 'Next Theme', run: cycleTheme },
@@ -51,8 +36,7 @@ export const COMMANDS = [
 ];
 
 export const PAL_MODES = {
-  file: { tag: 'File', hint: 'Type to fuzzy-match any file. Prefix : for a line, @ for a symbol, > for a command.' },
-  symbol: { tag: 'Symbol', hint: 'Symbols in the active file.' },
+  file: { tag: 'File', hint: 'Type to fuzzy-match any file. Prefix : for a line, > for a command.' },
   line: { tag: 'Line', hint: 'Enter a line number.' },
   command: { tag: 'Command', hint: '' },
   theme: { tag: 'Theme', hint: 'Arrows preview a theme. Enter keeps it, Esc restores the previous one.' },
@@ -81,7 +65,6 @@ export const refreshPalette = debounce(async () => {
   let mode = pal.mode === 'theme' ? 'theme' : 'file';
   if (mode === 'theme') { /* no prefixes: the query is a theme name */ }
   else if (raw.startsWith('>')) { mode = 'command'; raw = raw.slice(1); }
-  else if (raw.startsWith('@')) { mode = 'symbol'; raw = raw.slice(1); }
   else if (raw.startsWith(':')) { mode = 'line'; raw = raw.slice(1); }
   pal.mode = mode;
   $('#pal-mode').textContent = PAL_MODES[mode].tag;
@@ -95,12 +78,6 @@ export const refreshPalette = debounce(async () => {
   } else if (mode === 'command') {
     const lq = q.toLowerCase();
     pal.items = COMMANDS.filter(c => c.name.toLowerCase().includes(lq)).map(c => ({ kind: 'cmd', cmd: c, label: c.name, sub: '' }));
-  } else if (mode === 'symbol') {
-    const d = doc_();
-    if (d && !d.outline) { try { d.outline = (await api('/api/outline', { path: d.path })).symbols || []; } catch { d.outline = []; } }
-    const lq = q.toLowerCase();
-    pal.items = ((d && d.outline) || []).filter(s => !lq || s.name.toLowerCase().includes(lq))
-      .slice(0, 400).map(s => ({ kind: 'sym', n: s.line, label: s.name, sub: s.kind, right: String(s.line) }));
   } else if (mode === 'theme') {
     const lq = q.toLowerCase();
     pal.items = listThemes().filter(t => (t.name + ' ' + t.id).toLowerCase().includes(lq))
@@ -160,7 +137,7 @@ export function acceptPalette() {
   if (it.kind === 'theme') pal.restoreTheme = null;
   closePalette();
   if (it.kind === 'file') openFile(it.path);
-  else if (it.kind === 'sym' || it.kind === 'line') {
+  else if (it.kind === 'line') {
     const d = doc_(); if (!d) return;
     d.cur = it.n; centerLine(it.n); render(); updateStatus(); pushHistory(d.path, it.n);
   } else if (it.kind === 'cmd') it.cmd.run();

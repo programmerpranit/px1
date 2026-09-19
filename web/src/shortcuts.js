@@ -5,48 +5,33 @@ import { layout, render, paint, toggleWordWrap } from './renderer.js';
 import { updateStatus } from './status.js';
 import { closeTab, switchTab, reopenClosedTab } from './tabs.js';
 import { go } from './history.js';
-import { clearLink, hovercard } from './hover.js';
 import { openFind, clearFind, findbar } from './find.js';
-import { gotoDefinition, findReferences } from './lsp.js';
-import { showRightInspector, hideRightInspector } from './inspector.js';
+import { showSearchPanel, hideSearchPanel, toggleSearchPanel } from './search.js';
 import { overlay, openPalette, closePalette } from './palette.js';
 import { moveCursor, moveCol, moveWord, caretToEdge } from './cursor.js';
-import { showCalls } from './calls.js';
 import { SEL_KEYS, runSelectionAction, selectAll, clearSelectAll, copySelectAll } from './selbar.js';
 
 import { cycleTheme } from './theme.js';
-import { previewing, togglePreview, previewKey, selectPreview } from './markdown.js';
 import { toggleDiff } from './diff.js';
-import { openSettings, closeSettings, isSettingsOpen } from './settings.js';
-import { handleImageKey } from './imageview.js';
-import { submitBatch } from './agent.js';
 import { reindexWorkspace } from './panels.js';
-import {
-  editAvailable, isDirty, saveBuffer, undo, redo,
-  insertText, insertNewline, insertTab, backspace, deleteForward,
-} from './edit.js';
+import { editAvailable, isDirty, saveBuffer, undo, redo, insertText, insertNewline, insertTab, backspace, deleteForward, deleteWordBackward, deleteWordForward, toggleLineComment } from './edit.js';
 
 /* Each entry lists alternative combos, written as for keyLabel in state.js so
    they show as ⌘/⌥/⇧ on a Mac and Ctrl/Alt/Shift elsewhere. Browsers keep
    Ctrl+W and Cmd+W for themselves, so Alt+W is the close shortcut shown. */
 export const SHORTCUTS = [
-  [['Mod+,'], 'Open settings'],
   [['Mod+K'], 'Quick search / palette'], [['Mod+P'], 'Go to file'],
-  [['Mod+Shift+P'], 'Command palette'], [['Mod+Shift+O'], 'Go to symbol'],
+  [['Mod+Shift+P'], 'Command palette'],
   [['Mod+Shift+F'], 'Search in files'], [['Mod+Shift+R'], 'Refresh workspace'], [['Mod+F'], 'Find in file'],
   [['Mod+G'], 'Go to line'], [['Mod+D'], 'Toggle diff view (git)'], [['Alt+Z'], 'Toggle word wrap'],
   [['Click, then type'], 'Edit the file directly'], [['Mod+S'], 'Save'], [['Mod+Z', 'Mod+Shift+Z'], 'Undo / redo edit'],
-  [['Alt+M'], 'Toggle Markdown preview'],
+  [['Mod+Backspace', 'Mod+Delete'], 'Delete word before / after caret'], [['Mod+/'], 'Toggle line comment'],
   [['Enter', 'Shift+Enter'], 'Next / previous match'],
-  [['F12', 'Mod+Click'], 'Go to definition'], [['Shift+F12'], 'Find all references'],
-  [['Alt+Shift+H'], 'Call trail (callers / callees)'],
-  [['Mod+J'], 'Toggle right inspector (Symbols/Refs)'],
   [['Alt+Left', 'Alt+Right'], 'Navigate back / forward'], [['Mod+B'], 'Toggle sidebar'],
   [['Alt+W'], 'Close tab'], [['Alt+Shift+T'], 'Reopen closed tab'], [['Ctrl+Tab'], 'Next tab'],
   [['Alt+1…9'], 'Select tab'], [['Double click'], 'Highlight all occurrences'],
   [['Mod+A'], 'Select whole file'],
-  [['Alt+C', 'Alt+A'], 'Copy selection ref / with context'], [['Alt+U'], 'Find usages of selection'],
-  [['Alt+E'], 'Edit selection inline'],
+  [['Alt+C', 'Alt+A'], 'Copy selection ref / with context'],
   [['Right click'], 'Selection actions at the pointer'],
   [['Mod+Home|Mod+Up', 'Mod+End|Mod+Down'], 'Top / bottom of file'],
   [['Home|Mod+Left', 'End|Mod+Right'], 'Start / end of line'],
@@ -69,7 +54,6 @@ export const inField = el => el && (el.tagName === 'INPUT' || el.tagName === 'TE
 
 export function initShortcuts() {
   $('#btn-theme')?.addEventListener('click', cycleTheme);
-  $('#btn-settings')?.addEventListener('click', () => openSettings('ui'));
   $('#btn-help')?.addEventListener('click', showHelp);
   $('#st-ver')?.addEventListener('click', showHelp);
   $('#helpsheet').addEventListener('click', () => { $('#helpsheet').hidden = true; });
@@ -80,14 +64,10 @@ export function initShortcuts() {
     if (!btn) return;
     const act = btn.dataset.action;
     if (act === 'quick-open') openPalette('file');
-    else if (act === 'search') { showRightInspector('search'); $('#q')?.select(); }
-    else if (act === 'symbols') openPalette('symbol');
+    else if (act === 'search') showSearchPanel();
     else if (act === 'find') openFind(S.lastWord);
     else if (act === 'goto') openPalette('line');
     else if (act === 'wrap') toggleWordWrap();
-    else if (act === 'md-preview') togglePreview();
-    else if (act === 'palette') openPalette('command');
-    else if (act === 'settings') openSettings('ui');
     else if (act === 'help') showHelp();
   });
 
@@ -95,25 +75,15 @@ export function initShortcuts() {
     const mod = e[MOD];
 
     if (e.key === 'Escape') {
-      const lb = $('#img-lightbox');
-      if (lb && !lb.hidden) { lb.hidden = true; return; }
-      if (isSettingsOpen()) { closeSettings(); return; }
       if (!overlay.hidden) { closePalette(); return; }
       if (!$('#helpsheet').hidden) { $('#helpsheet').hidden = true; return; }
-      if (!hovercard.hidden) { clearLink(); return; }
       if (!findbar.hidden) { clearFind(); return; }
       const eb = $('#edit-banner');
       if (eb && !eb.hidden) { eb.hidden = true; return; }
       if (S.selAll) { clearSelectAll(); return; }
-      if (!document.body.classList.contains('right-hidden')) { hideRightInspector(); return; }
+      if (!document.body.classList.contains('right-hidden')) { hideSearchPanel(); return; }
       if (S.occ) { S.occ = null; paint(); return; }
       if (inField(document.activeElement)) document.activeElement.blur();
-      return;
-    }
-
-    if (mod && (e.key === ',' || e.key === '<')) {
-      e.preventDefault();
-      openSettings('ui');
       return;
     }
 
@@ -126,14 +96,12 @@ export function initShortcuts() {
 
     if (mod && (e.key === 'j' || e.key === 'J')) {
       e.preventDefault();
-      if (document.body.classList.contains('right-hidden')) showRightInspector('refs');
-      else hideRightInspector();
+      toggleSearchPanel();
       return;
     }
 
     if (mod && e.shiftKey && (e.key === 'P' || e.key === 'p')) { e.preventDefault(); openPalette('command'); return; }
-    if (mod && e.shiftKey && (e.key === 'O' || e.key === 'o')) { e.preventDefault(); showRightInspector('symbols'); return; }
-    if (mod && e.shiftKey && (e.key === 'F' || e.key === 'f')) { e.preventDefault(); showRightInspector('search'); $('#q')?.select(); return; }
+    if (mod && e.shiftKey && (e.key === 'F' || e.key === 'f')) { e.preventDefault(); showSearchPanel(); return; }
     if (mod && e.shiftKey && (e.key === 'R' || e.key === 'r')) { e.preventDefault(); reindexWorkspace(); return; }
     if (mod && !e.shiftKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); openPalette('file'); return; }
     if (mod && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); openPalette('line'); return; }
@@ -161,11 +129,6 @@ export function initShortcuts() {
       return;
     }
     if (e.altKey && e.shiftKey && !mod && e.code === 'KeyT') { e.preventDefault(); reopenClosedTab(); return; }
-    if (e.key === 'F12') {
-      e.preventDefault();
-      if (e.shiftKey) findReferences(); else gotoDefinition();
-      return;
-    }
     if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); go(-1); return; }
     if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); go(1); return; }
     if (e.ctrlKey && e.key === 'Tab') {
@@ -173,7 +136,6 @@ export function initShortcuts() {
       if (S.tabs.length > 1) switchTab((S.active + (e.shiftKey ? -1 : 1) + S.tabs.length) % S.tabs.length);
       return;
     }
-    if (e.altKey && e.shiftKey && e.code === 'KeyH') { e.preventDefault(); showCalls(); return; }
     if (e.altKey && !mod && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) { e.preventDefault(); switchTab(+e.code.slice(5) - 1); return; }
     // Selection actions, live only while the status bar is showing them.
     if (e.altKey && !mod && !e.shiftKey && SEL_KEYS[e.code] && runSelectionAction(SEL_KEYS[e.code])) { e.preventDefault(); return; }
@@ -183,26 +145,11 @@ export function initShortcuts() {
       return;
     }
 
-    if (e.altKey && !mod && !e.shiftKey && e.code === 'KeyM') {
-      e.preventDefault();
-      togglePreview();
-      return;
-    }
-
-    if (mod && !e.shiftKey && !e.altKey && e.key === 'Enter') {
-      const b = $('#agentbox');
-      if (b && !b.hidden) {
-        e.preventDefault();
-        submitBatch();
-        return;
-      }
-    }
-
     if (inField(document.activeElement)) return;
 
     // Select all takes the open file only, never the sidebar or status bar around it.
     const plainMod = mod && !e.shiftKey && !e.altKey;
-    if (plainMod && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); if (previewing()) selectPreview(); else selectAll(); return; }
+    if (plainMod && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); selectAll(); return; }
     if (plainMod && (e.key === 'c' || e.key === 'C') && copySelectAll()) { e.preventDefault(); return; }
 
     // Click into an editable file and type -- no separate mode. Takes over
@@ -221,11 +168,21 @@ export function initShortcuts() {
       }
     }
 
+    // Word delete and line-comment toggle: kept behind the inField guard
+    // above so Mod+Backspace/Mod+/ still behave natively in the commit
+    // message box and other app inputs, not just the editor.
+    if (mod && !e.altKey) {
+      const d = doc_();
+      if (d && editAvailable(d)) {
+        if (e.key === 'Backspace') { e.preventDefault(); deleteWordBackward(d); return; }
+        if (e.key === 'Delete') { e.preventDefault(); deleteWordForward(d); return; }
+        if (e.key === '/') { e.preventDefault(); toggleLineComment(d); return; }
+      }
+    }
+
     if (e.key === '?') { e.preventDefault(); showHelp(); return; }
     const d = doc_();
-    if (!d) return;
-    if (d.isImage) { if (handleImageKey(e)) e.preventDefault(); return; }
-    if (previewing(d)) { if (previewKey(e)) e.preventDefault(); return; }
+    if (!d || d.isImage) return;
     const toTop = () => { vp.scrollTop = 0; d.cur = 1; render(); updateStatus(); };
     const toBottom = () => { vp.scrollTop = sizer.offsetHeight; d.cur = d.total; render(); updateStatus(); };
     const shift = e.shiftKey;

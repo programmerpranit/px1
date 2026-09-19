@@ -13,8 +13,8 @@
 // the buffer shortly after typing pauses.
 import { $, S, doc_, apiPostJson } from './state.js';
 import { vp, showToast } from './ui.js';
-import { render, layout, placeCaret } from './renderer.js';
-import { lineText, revealCaretX, updateDomSelection } from './cursor.js';
+import { render, layout } from './renderer.js';
+import { lineText, updateDomSelection, WORD } from './cursor.js';
 import { updateStatus } from './status.js';
 import { clearFind } from './find.js';
 import { drawTabs } from './tabs.js';
@@ -98,12 +98,20 @@ function beginEdit(d, kind) {
 function afterEdit(d, structural) {
   d.buf.dirty = true;
   d.buf.gen++;
+  // The tokenized HTML from the last /api/highlight response no longer
+  // matches d.buf.lines -- without this, paint() keeps showing each edited
+  // row's pre-edit highlighted markup (paint() prefers it over plain
+  // escaped text) until the 300ms debounce below lands, so edits visibly
+  // lag behind the caret until typing pauses.
+  d.buf.highlighted = [];
+  // Ask the next paint to scroll the caret into view once the DOM actually
+  // reflects this edit; see paint() in renderer.js.
+  d.buf.revealPending = true;
   d.selAnchor = null;
   d.maxCols = Math.max(d.maxCols || 0, lineText(d, d.cur).length);
   drawTabs();
   if (structural) layout();
   render();
-  revealCaretX(placeCaret());
   updateDomSelection();
   updateStatus();
   scheduleHighlight(d);
@@ -217,6 +225,105 @@ export async function deleteForward(d) {
   }
 }
 
+/* Word boundary scan, identical to moveWord's in cursor.js so Mod+Backspace
+   deletes exactly what Alt+Left would have jumped over. */
+function wordStart(text, col) {
+  let c = col - 1;
+  while (c > 0 && /\s/.test(text[c])) c--;
+  if (WORD.test(text[c])) { while (c > 0 && WORD.test(text[c - 1])) c--; }
+  else { while (c > 0 && !WORD.test(text[c - 1]) && !/\s/.test(text[c - 1])) c--; }
+  return Math.max(0, c);
+}
+
+function wordEnd(text, col) {
+  const len = text.length;
+  let c = col;
+  if (WORD.test(text[c])) { while (c < len && WORD.test(text[c])) c++; }
+  else if (!/\s/.test(text[c])) { while (c < len && !WORD.test(text[c]) && !/\s/.test(text[c])) c++; }
+  while (c < len && /\s/.test(text[c])) c++;
+  return c;
+}
+
+export async function deleteWordBackward(d) {
+  if (!(await ensureBuffer(d))) return;
+  const range = selRange(d);
+  if (range) { beginEdit(d, 'other'); deleteSelectionRange(d, range); afterEdit(d, true); return; }
+  const col = colOf(d);
+  if (col === 0) return backspace(d); // merge with previous line, same as a plain backspace there
+  const text = d.buf.lines[d.cur - 1];
+  const start = wordStart(text, col);
+  beginEdit(d, 'other');
+  d.buf.lines[d.cur - 1] = text.slice(0, start) + text.slice(col);
+  d.col = start;
+  afterEdit(d, false);
+}
+
+export async function deleteWordForward(d) {
+  if (!(await ensureBuffer(d))) return;
+  const range = selRange(d);
+  if (range) { beginEdit(d, 'other'); deleteSelectionRange(d, range); afterEdit(d, true); return; }
+  const col = colOf(d);
+  const text = d.buf.lines[d.cur - 1];
+  if (col >= text.length) return deleteForward(d); // merge with next line, same as a plain delete there
+  const end = wordEnd(text, col);
+  beginEdit(d, 'other');
+  d.buf.lines[d.cur - 1] = text.slice(0, col) + text.slice(end);
+  d.col = col;
+  afterEdit(d, false);
+}
+
+/* ---------- line comment toggle (Mod+/) ---------- */
+
+// Chroma lexer name (d.lang, as reported by /api/file and /api/highlight) ->
+// line comment token. Unlisted languages report via showToast rather than
+// guessing a wrong prefix.
+const LINE_COMMENT = {
+  go: '//', c: '//', 'c++': '//', 'c#': '//', java: '//', javascript: '//', jsx: '//',
+  typescript: '//', tsx: '//', rust: '//', swift: '//', kotlin: '//', scala: '//',
+  php: '//', dart: '//', groovy: '//', 'objective-c': '//', 'objective-c++': '//', zig: '//',
+  sass: '//', scss: '//', less: '//',
+  python: '#', ruby: '#', perl: '#', bash: '#', shell: '#', 'shell session': '#',
+  makefile: '#', dockerfile: '#', yaml: '#', toml: '#', r: '#', elixir: '#',
+  julia: '#', nim: '#', crystal: '#', powershell: '#', tcl: '#', ini: '#', properties: '#',
+  lua: '--', haskell: '--', sql: '--', applescript: '--', ada: '--', vhdl: '--',
+  clojure: ';', 'common lisp': ';', scheme: ';', racket: ';', 'emacs lisp': ';',
+  'vim script': '"', matlab: '%', erlang: '%', latex: '%', tex: '%',
+  fortran: '!', batchfile: 'REM',
+};
+
+export async function toggleLineComment(d) {
+  if (!(await ensureBuffer(d))) return;
+  const prefix = LINE_COMMENT[(d.lang || '').toLowerCase()];
+  if (!prefix) { showToast('!', 'No comment syntax known for ' + (d.lang || 'this file')); return; }
+
+  const range = selRange(d);
+  let startLine = d.cur, endLine = d.cur;
+  if (range) {
+    startLine = range.start.line;
+    endLine = (range.end.col === 0 && range.end.line > range.start.line) ? range.end.line - 1 : range.end.line;
+  }
+
+  const pat = new RegExp('^(\\s*)' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' ?');
+  let allCommented = true;
+  for (let l = startLine; l <= endLine; l++) {
+    const line = d.buf.lines[l - 1];
+    if (line.trim() === '') continue;
+    if (!pat.test(line)) { allCommented = false; break; }
+  }
+
+  beginEdit(d, 'other');
+  for (let l = startLine; l <= endLine; l++) {
+    const line = d.buf.lines[l - 1];
+    if (allCommented) {
+      d.buf.lines[l - 1] = line.replace(pat, '$1');
+    } else if (line.trim() !== '') {
+      const indent = line.match(/^\s*/)[0];
+      d.buf.lines[l - 1] = indent + prefix + ' ' + line.slice(indent.length);
+    }
+  }
+  afterEdit(d, true);
+}
+
 export function undo(d) {
   if (!d.buf || !d.buf.undo.length) return;
   d.buf.redo.push(snapshot(d));
@@ -228,6 +335,7 @@ export function undo(d) {
   d.total = d.buf.lines.length;
   d.buf.dirty = true;
   d.buf.gen++;
+  d.buf.highlighted = [];
   d.buf.lastKind = '';
   drawTabs();
   layout();
@@ -248,6 +356,7 @@ export function redo(d) {
   d.total = d.buf.lines.length;
   d.buf.dirty = true;
   d.buf.gen++;
+  d.buf.highlighted = [];
   d.buf.lastKind = '';
   drawTabs();
   layout();
@@ -315,6 +424,7 @@ function showConflict(d, body) {
     const trailingNL = body.content.endsWith('\n');
     d.buf.lines = (trailingNL ? body.content.slice(0, -1) : body.content).split('\n');
     d.buf.trailingNL = trailingNL;
+    d.buf.highlighted = [];
     d.buf.baseMtime = body.mtime;
     d.buf.baseSize = body.size;
     d.buf.dirty = false;

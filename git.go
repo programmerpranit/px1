@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -153,6 +155,278 @@ func gitDiff(root, relpath string) string {
 		return ""
 	}
 	return string(out)
+}
+
+// GitFileStatus is one changed file's index (staged) and worktree (unstaged)
+// status, kept separate so the UI can render VS Code-style "Staged Changes"
+// and "Changes" groups, with a file appearing in both at once.
+type GitFileStatus struct {
+	Path     string `json:"path"`
+	Staged   string `json:"staged"`   // "" none, else A/M/D/R/C/!
+	Unstaged string `json:"unstaged"` // "" none, else M/D/U(untracked)/!
+}
+
+// xyLetter maps one side (index or worktree) of a porcelain v2 XY code.
+func xyLetter(c byte) string {
+	switch c {
+	case '.':
+		return ""
+	case 'A':
+		return "A"
+	case 'D':
+		return "D"
+	case 'R':
+		return "R"
+	case 'C':
+		return "C"
+	case 'U':
+		return "!"
+	default: // M (modified), T (typechange) and anything else read as modified
+		return "M"
+	}
+}
+
+// gitStatusXY lists every changed file with its staged and unstaged status
+// kept separate, for the stage/unstage panel. Fails quiet: nil on any error,
+// no repo, or disabled.
+func gitStatusXY(root string) []GitFileStatus {
+	info := gitProbe(root)
+	if !info.ok {
+		return nil
+	}
+	out, err := exec.Command("git", "-C", root, "status", "--porcelain=v2", "-z", "-uall").Output()
+	if err != nil {
+		return nil
+	}
+	prefix := ""
+	if rel, err := filepath.Rel(info.toplevel, root); err == nil && rel != "." {
+		prefix = filepath.ToSlash(rel) + "/"
+	}
+	key := func(p string) (string, bool) {
+		if prefix == "" {
+			return p, true
+		}
+		if !strings.HasPrefix(p, prefix) {
+			return "", false
+		}
+		return p[len(prefix):], true
+	}
+
+	var out2 []GitFileStatus
+	fields := strings.Split(string(out), "\x00")
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if f == "" {
+			continue
+		}
+		switch f[0] {
+		case '?':
+			if k, ok := key(f[2:]); ok {
+				out2 = append(out2, GitFileStatus{Path: k, Unstaged: "U"})
+			}
+		case '1':
+			p := strings.SplitN(f, " ", 9)
+			if len(p) == 9 {
+				if k, ok := key(p[8]); ok {
+					out2 = append(out2, GitFileStatus{Path: k, Staged: xyLetter(p[1][0]), Unstaged: xyLetter(p[1][1])})
+				}
+			}
+		case '2':
+			p := strings.SplitN(f, " ", 10)
+			if len(p) == 10 {
+				if k, ok := key(p[9]); ok {
+					out2 = append(out2, GitFileStatus{Path: k, Staged: xyLetter(p[1][0]), Unstaged: xyLetter(p[1][1])})
+				}
+			}
+			i++ // original path follows as its own field
+		case 'u':
+			p := strings.SplitN(f, " ", 11)
+			if len(p) == 11 {
+				if k, ok := key(p[10]); ok {
+					out2 = append(out2, GitFileStatus{Path: k, Staged: "!", Unstaged: "!"})
+				}
+			}
+		}
+	}
+	return out2
+}
+
+// gitDiffCached returns the unified diff of relpath staged in the index
+// against HEAD. Fails quiet -> "".
+func gitDiffCached(root, relpath string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--cached", "--no-color", "--", relpath).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// gitDiffCachedAll returns the unified diff of everything staged in the
+// index against HEAD. Fails quiet -> "".
+func gitDiffCachedAll(root string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--cached", "--no-color").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// gitDiffUnstaged returns the unified diff of relpath's worktree contents
+// against the index. Fails quiet -> "".
+func gitDiffUnstaged(root, relpath string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--no-color", "--", relpath).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// gitHasHEAD reports whether the repo has at least one commit.
+func gitHasHEAD(root string) bool {
+	return exec.Command("git", "-C", root, "rev-parse", "--verify", "-q", "HEAD").Run() == nil
+}
+
+// gitStage runs `git add` on relpath, staging its current worktree content.
+func gitStage(root, relpath string) error {
+	out, err := exec.Command("git", "-C", root, "add", "--", relpath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gitUnstage removes relpath from the index without touching the worktree.
+// A repo with no commits yet has no HEAD to reset against, so a newly added
+// file is un-staged with `git rm --cached` instead.
+func gitUnstage(root, relpath string) error {
+	var cmd *exec.Cmd
+	if gitHasHEAD(root) {
+		cmd = exec.Command("git", "-C", root, "reset", "-q", "HEAD", "--", relpath)
+	} else {
+		cmd = exec.Command("git", "-C", root, "rm", "--cached", "-q", "--", relpath)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gitDiscard reverts relpath's worktree content, throwing away unstaged
+// changes. An untracked file has no index/HEAD version to revert to, so it
+// is deleted outright; anything else is restored from the index. Status is
+// checked server-side rather than trusted from the caller, since this is
+// destructive.
+func gitDiscard(root, relpath string) error {
+	for _, f := range gitStatusXY(root) {
+		if f.Path != relpath {
+			continue
+		}
+		if f.Unstaged == "U" {
+			if err := os.Remove(filepath.Join(root, relpath)); err != nil {
+				return err
+			}
+			return nil
+		}
+		break
+	}
+	out, err := exec.Command("git", "-C", root, "checkout", "--", relpath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gitStageAll stages every path in one `git add`. Bulk actions must run as a
+// single git invocation, not one process per file: `git add`/`reset`/`rm`
+// each take the index lock, so N concurrent per-file calls (as the SCM
+// panel's Stage All used to issue) mostly fail on "Unable to create
+// '.git/index.lock': File exists" -- git does not retry or queue for it.
+func gitStageAll(root string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := append([]string{"-C", root, "add", "--"}, paths...)
+	out, err := exec.Command("git", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gitUnstageAll un-stages every path in one command; see gitUnstage for the
+// no-HEAD fallback, which applies repo-wide so one branch covers the batch.
+func gitUnstageAll(root string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	var args []string
+	if gitHasHEAD(root) {
+		args = append([]string{"-C", root, "reset", "-q", "HEAD", "--"}, paths...)
+	} else {
+		args = append([]string{"-C", root, "rm", "--cached", "-q", "--"}, paths...)
+	}
+	out, err := exec.Command("git", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gitDiscardAll reverts every path's worktree content in at most two
+// commands: untracked paths are deleted (batched), everything else is
+// restored from the index via one `git checkout`.
+func gitDiscardAll(root string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	untracked := map[string]bool{}
+	for _, f := range gitStatusXY(root) {
+		if f.Unstaged == "U" {
+			untracked[f.Path] = true
+		}
+	}
+	var toDelete, toCheckout []string
+	for _, p := range paths {
+		if untracked[p] {
+			toDelete = append(toDelete, p)
+		} else {
+			toCheckout = append(toCheckout, p)
+		}
+	}
+	for _, p := range toDelete {
+		if err := os.Remove(filepath.Join(root, p)); err != nil {
+			return err
+		}
+	}
+	if len(toCheckout) > 0 {
+		args := append([]string{"-C", root, "checkout", "--"}, toCheckout...)
+		out, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// gitCommit commits the current index with message. Errors (e.g. unset
+// user.name/user.email, or nothing staged) are returned verbatim from git so
+// the UI can show them.
+func gitCommit(root, message string) error {
+	out, err := exec.Command("git", "-C", root, "commit", "-m", message).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // gitHunks parses the unified diff of relpath against HEAD into 1-based

@@ -15,7 +15,7 @@ func TestFileSaveRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, body := agentPostJSON(t, s, "/api/file/save", map[string]any{
+	code, body := postJSON(t, s, "/api/file/save", map[string]any{
 		"path":    "main.go",
 		"content": "package main\n\n// edited\nfunc main() {}\n",
 		"mtime":   st.ModTime().UnixMilli(),
@@ -48,7 +48,7 @@ func TestFileSaveConflictOnStaleToken(t *testing.T) {
 	abs := filepath.Join(root, "main.go")
 
 	// Stale mtime/size (zero) never matches the real file.
-	code, body := agentPostJSON(t, s, "/api/file/save", map[string]any{
+	code, body := postJSON(t, s, "/api/file/save", map[string]any{
 		"path":    "main.go",
 		"content": "package main\n",
 		"mtime":   int64(1),
@@ -70,7 +70,7 @@ func TestFileSaveConflictOnStaleToken(t *testing.T) {
 
 func TestFileSaveRejectsPathTraversal(t *testing.T) {
 	s, _ := newTestServer(t)
-	code, body := agentPostJSON(t, s, "/api/file/save", map[string]any{
+	code, body := postJSON(t, s, "/api/file/save", map[string]any{
 		"path":    "../outside.go",
 		"content": "package main\n",
 	})
@@ -95,9 +95,9 @@ func TestFileSaveRejectsSymlinkEscape(t *testing.T) {
 	}
 	ix := NewIndex(root)
 	ix.Build()
-	s := NewServer(ix, nil)
+	s := NewServer(ix)
 
-	code, body := agentPostJSON(t, s, "/api/file/save", map[string]any{
+	code, body := postJSON(t, s, "/api/file/save", map[string]any{
 		"path":    "escape/secret.txt",
 		"content": "pwned\n",
 	})
@@ -119,7 +119,7 @@ func TestFileSaveRejectsOversizedContent(t *testing.T) {
 	for i := range big {
 		big[i] = 'a'
 	}
-	code, body := agentPostJSON(t, s, "/api/file/save", map[string]any{
+	code, body := postJSON(t, s, "/api/file/save", map[string]any{
 		"path":    "main.go",
 		"content": string(big),
 	})
@@ -130,7 +130,7 @@ func TestFileSaveRejectsOversizedContent(t *testing.T) {
 
 func TestFileSaveRejectsBinaryContent(t *testing.T) {
 	s, _ := newTestServer(t)
-	code, body := agentPostJSON(t, s, "/api/file/save", map[string]any{
+	code, body := postJSON(t, s, "/api/file/save", map[string]any{
 		"path":    "main.go",
 		"content": "package main\x00binary",
 	})
@@ -147,32 +147,9 @@ func TestFileSaveRequiresLocalPost(t *testing.T) {
 	}
 }
 
-func TestFileSaveBlockedWhileAgentEditRunning(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	harness := writeHarness(t, "sleep 5\n")
-	s := agentServer(t, root, harness)
-
-	code, body := agentPostJSON(t, s, "/api/agent/edit", map[string]any{
-		"path": "main.go", "l1": 1, "l2": 3, "instruction": "noop",
-	})
-	if code != 200 {
-		t.Fatalf("agent edit start status %d (%v)", code, body)
-	}
-
-	saveCode, saveBody := agentPostJSON(t, s, "/api/file/save", map[string]any{
-		"path": "main.go", "content": "package main\n",
-	})
-	if saveCode != 409 {
-		t.Fatalf("save status %d, want 409 while agent job runs (%v)", saveCode, saveBody)
-	}
-}
-
 func TestFileRenameRoundTrip(t *testing.T) {
 	s, root := newTestServer(t)
-	code, body := agentPostJSON(t, s, "/api/file/rename", map[string]any{
+	code, body := postJSON(t, s, "/api/file/rename", map[string]any{
 		"path": "greet.go", "newPath": "hello/greet.go",
 	})
 	if code != 200 {
@@ -188,7 +165,7 @@ func TestFileRenameRoundTrip(t *testing.T) {
 
 func TestFileRenameRejectsExistingDestination(t *testing.T) {
 	s, _ := newTestServer(t)
-	code, body := agentPostJSON(t, s, "/api/file/rename", map[string]any{
+	code, body := postJSON(t, s, "/api/file/rename", map[string]any{
 		"path": "greet.go", "newPath": "main.go",
 	})
 	if code != 409 {
@@ -198,7 +175,7 @@ func TestFileRenameRejectsExistingDestination(t *testing.T) {
 
 func TestFileRenameRejectsPathTraversal(t *testing.T) {
 	s, _ := newTestServer(t)
-	code, body := agentPostJSON(t, s, "/api/file/rename", map[string]any{
+	code, body := postJSON(t, s, "/api/file/rename", map[string]any{
 		"path": "greet.go", "newPath": "../outside.go",
 	})
 	if code != 400 {
@@ -208,7 +185,7 @@ func TestFileRenameRejectsPathTraversal(t *testing.T) {
 
 func TestHighlightTokenisesPostedContent(t *testing.T) {
 	s, _ := newTestServer(t)
-	code, body := agentPostJSON(t, s, "/api/highlight", map[string]any{
+	code, body := postJSON(t, s, "/api/highlight", map[string]any{
 		"path":    "scratch.go",
 		"content": "package main\n\nfunc main() {}\n",
 	})
@@ -235,7 +212,7 @@ func TestHighlightTokenisesPostedContent(t *testing.T) {
 
 func TestHighlightNeverTouchesDisk(t *testing.T) {
 	s, root := newTestServer(t)
-	code, _ := agentPostJSON(t, s, "/api/highlight", map[string]any{
+	code, _ := postJSON(t, s, "/api/highlight", map[string]any{
 		"path":    "main.go",
 		"content": "package main\n\n// not on disk\n",
 	})
@@ -257,7 +234,7 @@ func TestHighlightRejectsOversizedContent(t *testing.T) {
 	for i := range big {
 		big[i] = 'a'
 	}
-	code, body := agentPostJSON(t, s, "/api/highlight", map[string]any{
+	code, body := postJSON(t, s, "/api/highlight", map[string]any{
 		"path": "main.go", "content": string(big),
 	})
 	if code != 413 {

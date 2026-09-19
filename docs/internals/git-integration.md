@@ -1,15 +1,15 @@
 # Git Awareness & Diffing
 
-This document describes the design and implementation of px0's git integration engine ([`git.go`](../../git.go)) and its diff-rendering frontend ([`web/src/diff.js`](../../web/src/diff.js)).
+This document describes the design and implementation of px1's git integration engine ([`git.go`](../../git.go)) and its diff-rendering frontend ([`web/src/diff.js`](../../web/src/diff.js)).
 
 ## 1. Zero-Dependency Shell-Out Architecture
 
-px0 avoids heavy third-party Go git libraries (such as `go-git`, which can consume large amounts of memory re-parsing packfiles, or `libgit2`, which requires CGO).
+px1 avoids heavy third-party Go git libraries (such as `go-git`, which can consume large amounts of memory re-parsing packfiles, or `libgit2`, which requires CGO).
 
-Instead, px0 adheres to a Pure Shell-Out Architecture:
+Instead, px1 adheres to a Pure Shell-Out Architecture:
 
 - Shells out directly to the host `git` binary.
-- Never stages, commits, or changes refs or the index. The only workspace writes px0 makes are the ones a dispatched coding harness makes itself ([Harness Editing & Agent Dispatch](agent-editing.md)).
+- The only writes px1 makes to git state are the explicit ones: `git add` (stage), `git reset`/`git rm --cached` (unstage), and `git commit` — all user-triggered from the Source Control panel, never automatic.
 - Zero disk footprint: holds all status and diff structures in volatile memory on the `Index` (`Node.Status`).
 - Graceful degradation: if `git` is not installed, or if the opened directory is not a git repository, git features degrade silently without warnings or errors.
 - Can be disabled explicitly using the `-no-git` CLI flag.
@@ -18,7 +18,7 @@ Instead, px0 adheres to a Pure Shell-Out Architecture:
 
 On large repositories, running `git status` can take 50-100 milliseconds. Running this serially during startup would delay index readiness.
 
-px0 runs `git status` concurrently alongside the filesystem walk:
+px1 runs `git status` concurrently alongside the filesystem walk:
 
 ```go
 gsCh := make(chan map[string]string, 1)
@@ -33,7 +33,7 @@ gs := <-gsCh
 
 ### Git Command Specification
 
-px0 invokes:
+px1 invokes:
 
 ```bash
 git status --porcelain=v2 -z
@@ -73,7 +73,7 @@ for p := rel; p != ""; {
 
 This enables the file tree in the sidebar to visually highlight collapsed directories that contain modified descendants, allowing developers to immediately spot repository changes.
 
-## 4. Diffing: One Git Call, Two Consumers, Three Views
+## 4. Diffing: One Git Call, Two Consumers
 
 Both the line gutter and the full diff view are read off the same shell-out, `gitDiff(root, relpath)`:
 
@@ -95,18 +95,15 @@ When viewing a file, the editor displays green, blue, and red markers in the lin
 
 ### File Diff (`/api/diff?path=...`)
 
-`handleDiff` (`server.go`) returns `{ path, diff, available }` — the same raw text `gitDiff` produced, with `available` set whenever it's non-empty (clean or untracked files get `""`). No hunk parsing happens on the server for this endpoint; the client owns that, because it needs two different reshapes of the same hunks (split and unified) and re-parsing client-side avoids two server round trips or two response shapes for one diff.
+`handleDiff` (`server.go`) returns `{ path, diff, available }` — the same raw text `gitDiff` produced, with `available` set whenever it's non-empty (clean or untracked files get `""`). No hunk parsing happens on the server for this endpoint; `diff.js` parses it client-side into the split layout it renders.
 
-### Split & Unified Views (`web/src/diff.js`)
+### Split Diff View (`web/src/diff.js`)
 
-The active tab gets a `Source | Diff` switch next to the tab bar (`#diff-switch`, shown only when `d.diffAvailable`) whenever the open file is modified in a git repo. `#diff-source` and `#diff-btn` each show their own view, and hovering the Diff half opens the Split/Unified menu; `Cmd/Ctrl+D` toggles the same thing, resuming whichever layout was used last (`localStorage['px0.diffLayout']`, default `split`). Diff view and the Markdown preview are mutually exclusive — entering one hides the other — and each tab remembers its own state on `d.diffMode` (`'split' | 'unified' | null`).
+The active tab gets a `Source | Diff` switch next to the tab bar (`#diff-switch`, shown only when `d.diffAvailable`) whenever the open file is modified in a git repo. `#diff-source` and `#diff-btn` toggle between the two; `Cmd/Ctrl+D` does the same thing. Each tab remembers its own state on `d.diffMode` (`'split' | null`) — there is intentionally only one diff layout (side-by-side, like GitHub's split view), not a split/unified toggle.
 
-Unlike the main code view, the diff is **not** rendered through the virtualized `#rows` viewport. A single file's diff is small (bounded by the size of that one file), so `diff.js` renders it as plain DOM into a dedicated `#diffview` overlay — the same overlay-over-`#viewport` pattern the Markdown preview uses (see [Markdown Preview](markdown.md)), just with its own content:
+Unlike the main code view, the diff is **not** rendered through the virtualized `#rows` viewport. A single file's diff is small (bounded by the size of that one file), so `diff.js` renders it as plain DOM into a dedicated `#diffview` overlay:
 
-1. **Parse.** `parseDiff(text)` splits the raw diff on `@@ ... @@` hunk headers and walks each hunk's `+`/`-`/context lines once, tagging every row `add` / `del` / `ctx` and carrying its old-file and/or new-file line number. This runs once per file per session; the parsed hunks are cached on `d.diffHunks` so switching Split ↔ Unified re-renders from memory with no re-fetch.
-1. **Unified layout.** One row per parsed line: old-line column, new-line column (whichever side doesn't apply is blank), a `+`/`-` marker, and the code — a direct read of `d.diffHunks`, GitHub-"unified"-style.
-1. **Split layout.** `pairRows(hunk.rows)` walks each hunk and pairs a deletion run with the addition run immediately following it, index by index, padding the shorter side with a blank cell (`.diff-blank`) — the same replacement-block pairing GitHub's split view uses. Context lines pass straight across both columns unpaired. Each pair renders as one flex row with a left/right half, so the two columns stay vertically aligned for free — no synced-scroll JavaScript, because both halves of a pair are literally the same DOM row.
+1. **Parse.** `parseDiff(text)` splits the raw diff on `@@ ... @@` hunk headers and walks each hunk's `+`/`-`/context lines once, tagging every row `add` / `del` / `ctx` and carrying its old-file and/or new-file line number. This runs once per file per session; the parsed hunks are cached on `d.diffHunks` so re-entering diff mode re-renders from memory with no re-fetch.
+1. **Split layout.** `pairRows(hunk.rows)` (via `splitTable`) walks each hunk and pairs a deletion run with the addition run immediately following it, index by index, padding the shorter side with a blank cell (`.diff-blank`) — the same replacement-block pairing GitHub's split view uses. Context lines pass straight across both columns unpaired. Each pair renders as one flex row with a left/right half, so the two columns stay vertically aligned for free — no synced-scroll JavaScript, because both halves of a pair are literally the same DOM row.
 
-Every rendered row that exists in the working tree carries its line in `data-l`, on both halves of a split context row; a deleted row carries `data-at`, the working-tree line it sat before. `selbar.js` reads these so a selection anywhere in the diff can drive the selection bar, the right-click menu and Edit with Agent (see [Harness Editing & Agent Dispatch](agent-editing.md)).
-
-Both layouts share the same hunk-header, line-number, marker, and code-cell builders; only the row-shape (one column vs. two) differs, so a fix to how a line renders never needs to be made twice.
+Every rendered row that exists in the working tree carries its line in `data-l`, on both halves of a split context row; a deleted row carries `data-at`, the working-tree line it sat before. `selbar.js` reads these so a selection anywhere in the diff can drive the selection bar and the right-click copy actions.

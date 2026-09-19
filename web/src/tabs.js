@@ -1,23 +1,32 @@
 // web/src/tabs.js
 import { $, esc, S, doc_, api, LH, CHUNK, withKeys } from './state.js';
-import { vp, sizer, rowsEl, editor } from './ui.js';
+import { vp, sizer, rowsEl } from './ui.js';
 import { render, layout, refineChunk } from './renderer.js';
-import { updateStatus, setStatusNote, refreshMetrics } from './status.js';
+import { updateStatus, setStatusNote } from './status.js';
 import { pushHistory } from './history.js';
-import { warmLSP } from './lsp.js';
-import { loadOutline } from './outline.js';
 import { showPanel } from './panels.js';
 import { revealDir } from './tree.js';
-import { clearLink } from './hover.js';
 import { clearFind } from './find.js';
 import { clearSelectAll } from './selbar.js';
-import { syncPreview, previewing, previewLine } from './markdown.js';
-import { syncDiffView, layoutPref, diffScrollTop } from './diff.js';
-import { syncImageView } from './imageview.js';
+import { syncDiffView, diffScrollTop } from './diff.js';
 
 // Recently closed files, newest last, for Alt+Shift+T.
 const closedTabs = [];
 const MAX_CLOSED = 20;
+
+// A minimal image view: no zoom/pan, just the raw file rendered to size.
+export function syncImageView() {
+  const wrap = $('#imgview');
+  if (!wrap) return;
+  const d = doc_();
+  if (d && d.isImage) {
+    wrap.hidden = false;
+    const img = $('#imgview-img');
+    if (img) img.src = '/api/raw?path=' + encodeURIComponent(d.path);
+  } else {
+    wrap.hidden = true;
+  }
+}
 
 export async function openFile(path, opts = {}) {
   const { line, push = true, col } = opts;
@@ -39,16 +48,15 @@ export async function openFile(path, opts = {}) {
       size: j.size, mtime: j.mtime, lines: isImg ? [] : new Array(j.total),
       chunks: new Set(isImg ? [] : [start / CHUNK]),
       pending: new Set(), refining: new Set(), scrollTop: 0, cur: line || 1,
-      outline: null, gen: 0, markdown: !isImg && !!j.markdown, isImage: isImg,
+      gen: 0, isImage: isImg,
       gutter: null,
-      diffMode: hasDiff ? (layoutPref() || 'split') : null,
+      diffMode: hasDiff ? 'split' : null,
       diffAvailable: hasDiff,
       diffDismissed: false,
     };
     if (!isImg) {
       for (let i = 0; i < j.lines.length; i++) d.lines[j.start + i] = j.lines[i];
     }
-    d.lsp = (!isImg && j.lsp) || { state: 'off', server: '' };
     S.tabs.push(d);
     idx = S.tabs.length - 1;
     if (!isImg && j.refine) refineChunk(d, start / CHUNK);
@@ -62,20 +70,14 @@ export async function openFile(path, opts = {}) {
 
   $('#empty').hidden = true;
   syncImageView();
-  syncPreview();
   syncDiffView();
   if (!S.at || S.at.path !== d.path) S.at = null;
-  S.lsp.state = (d.lsp && d.lsp.state) || 'off';
-  S.lsp.server = (d.lsp && d.lsp.server) || '';
-  S.lsp.missing = (d.lsp && d.lsp.missing) || '';
-  warmLSP(d);
   drawTabs(); drawCrumbs(); layout();
 
   if (line) { d.cur = line; centerLine(line); }
   else vp.scrollTop = d.scrollTop;
   render();
   updateStatus();
-  if ($('#panel-outline')?.classList.contains('active')) loadOutline();
   if (push) pushHistory(path, line || d.cur, col);
   saveWorkspaceState();
 }
@@ -91,10 +93,9 @@ export async function loadGutter(d) {
     const j = await api('/api/gutter', { path: d.path });
     d.diffAvailable = !!j.available;
     if (j.available && d.diffMode === null && !d.diffDismissed) {
-      d.diffMode = layoutPref() || 'split';
+      d.diffMode = 'split';
       if (doc_() === d) {
         syncDiffView();
-        syncPreview();
       }
     }
     if (!j.available) {
@@ -119,13 +120,7 @@ export async function reloadOpenTabs() {
   if (S.tabs.length === 0) return;
 
   const activeDoc = doc_();
-  if (activeDoc) {
-    activeDoc.scrollTop = vp.scrollTop;
-    if (previewing(activeDoc)) {
-      const mv = $('#mdview');
-      if (mv) activeDoc.mdScroll = mv.scrollTop;
-    }
-  }
+  if (activeDoc) activeDoc.scrollTop = vp.scrollTop;
 
   const targets = S.tabs.map(t => ({
     oldDoc: t,
@@ -165,9 +160,8 @@ export async function reloadOpenTabs() {
     const hasDiff = !!j.diffAvailable;
     const newCur = Math.max(1, Math.min(keep.cur || 1, j.total));
 
-    /* A reload keeps each tab in the view it was in. The file changing under
-       it, say from an agent edit, is no reason to swap source for a diff, so a
-       tab in source is marked dismissed and loadGutter leaves it there too. */
+    /* A reload keeps each tab in the view it was in. A tab in source is
+       marked dismissed and loadGutter leaves it there too. */
     const diffMode = hasDiff ? (keep.diffMode || null) : null;
 
     const d = {
@@ -185,10 +179,7 @@ export async function reloadOpenTabs() {
       scrollTop: keep.scrollTop || 0,
       cur: newCur,
       col: keep.col || 0,
-      outline: null,
       gen: 0,
-      markdown: !!j.markdown,
-      mdScroll: keep.mdScroll || 0,
       gutter: null,
       diffMode,
       diffAvailable: hasDiff,
@@ -199,7 +190,6 @@ export async function reloadOpenTabs() {
     for (let k = 0; k < j.lines.length; k++) {
       d.lines[j.start + k] = j.lines[k];
     }
-    d.lsp = j.lsp || { state: 'off', server: '' };
 
     S.tabs[idx] = d;
     if (j.refine) refineChunk(d, tgt.start / CHUNK);
@@ -210,17 +200,11 @@ export async function reloadOpenTabs() {
 
   const d = doc_();
   if (d) {
-    S.lsp.state = (d.lsp && d.lsp.state) || 'off';
-    S.lsp.server = (d.lsp && d.lsp.server) || '';
-    S.lsp.missing = (d.lsp && d.lsp.missing) || '';
-    warmLSP(d);
     syncImageView();
-    syncPreview();
     syncDiffView(true);
     layout();
     vp.scrollTop = d.scrollTop;
     render();
-    if ($('#panel-outline')?.classList.contains('active')) loadOutline();
   }
 
   drawTabs();
@@ -230,7 +214,6 @@ export async function reloadOpenTabs() {
 }
 
 export function centerLine(n) {
-  if (previewing()) { previewLine(n); return; }
   const y = (n - 1) * LH - Math.max(0, vp.clientHeight / 2 - LH * 2);
   vp.scrollTop = Math.max(0, y);
 }
@@ -246,21 +229,17 @@ export function closeTab(i) {
       const scrollTop = i === S.active ? vp.scrollTop : closed.scrollTop;
       closedTabs.push({ path: closed.path, cur: closed.cur, scrollTop });
       if (closedTabs.length > MAX_CLOSED) closedTabs.shift();
-      api('/api/close', { path: closed.path })
-        .then(() => refreshMetrics())
-        .catch(() => {});
+      api('/api/close', { path: closed.path }).catch(() => {});
     }
     // Release large arrays to assist garbage collection
     closed.lines = null;
     closed.chunks?.clear?.();
     closed.pending?.clear?.();
     closed.refining?.clear?.();
-    closed.outline = null;
   }
   if (S.tabs.length === 0) {
     S.active = -1;
     syncImageView();
-    syncPreview();
     syncDiffView();
     rowsEl.innerHTML = ''; sizer.style.height = '0px';
     $('#empty').hidden = false; drawCrumbs();
@@ -271,7 +250,6 @@ export function closeTab(i) {
   S.active = Math.min(i, S.tabs.length - 1);
   const d = doc_();
   syncImageView();
-  syncPreview();
   syncDiffView();
   drawTabs(); drawCrumbs(); layout();
   vp.scrollTop = d.scrollTop; render(); updateStatus();
@@ -305,24 +283,17 @@ export function drawTabs() {
 
 export function switchTab(i) {
   if (i === S.active || !S.tabs[i]) return;
-  clearLink();
   const prev = doc_();
   if (prev) prev.scrollTop = vp.scrollTop;
   S.active = i;
   syncImageView();
-  syncPreview();
   syncDiffView();
   clearFind();
   clearSelectAll();
   S.at = null;
-  S.lsp.state = (S.tabs[i].lsp && S.tabs[i].lsp.state) || 'off';
-  S.lsp.server = (S.tabs[i].lsp && S.tabs[i].lsp.server) || '';
-  S.lsp.missing = (S.tabs[i].lsp && S.tabs[i].lsp.missing) || '';
-  warmLSP(S.tabs[i]);
   drawTabs(); drawCrumbs(); layout();
   vp.scrollTop = S.tabs[i].scrollTop;
   render(); updateStatus();
-  if ($('#panel-outline')?.classList.contains('active')) loadOutline();
   pushHistory(S.tabs[i].path, S.tabs[i].cur);
   saveWorkspaceState();
 }
@@ -330,13 +301,13 @@ export function switchTab(i) {
 export function saveWorkspaceState() {
   try {
     const tabs = S.tabs.map(t => ({ path: t.path, cur: t.cur }));
-    sessionStorage.setItem('px0.tabs', JSON.stringify({ tabs, active: S.active }));
+    sessionStorage.setItem('px1.tabs', JSON.stringify({ tabs, active: S.active }));
   } catch {}
 }
 
 export async function restoreWorkspaceTabs() {
   try {
-    const saved = sessionStorage.getItem('px0.tabs');
+    const saved = sessionStorage.getItem('px1.tabs');
     if (!saved) return false;
     const { tabs, active } = JSON.parse(saved);
     if (!Array.isArray(tabs) || tabs.length === 0) return false;
@@ -355,15 +326,6 @@ export async function restoreWorkspaceTabs() {
 export function drawCrumbs() {
   const el = $('#crumbs');
   if (el) el.innerHTML = '';
-}
-
-export function showImage(path) {
-  openFile(path);
-}
-
-export function hideImage() {
-  const b = $('#imgview');
-  if (b) b.hidden = true;
 }
 
 export function initTabs() {

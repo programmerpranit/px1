@@ -10,11 +10,12 @@ import (
 	"io"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,56 +40,41 @@ func useDiskAssets(dir string) error {
 }
 
 type Server struct {
-	ix    *Index
-	lsp   *lspManager
-	agent *agentManager // nil unless main wires editing for this session
-	mux   *http.ServeMux
+	ix  *Index
+	mux *http.ServeMux
 
 	lastReq atomic.Int64 // unix nanos of the most recent request
 }
 
-func NewServer(ix *Index, lsp *lspManager) *Server {
-	if lsp == nil {
-		lsp = newLSPManager(ix.Root(), false)
-	}
-	s := &Server{ix: ix, lsp: lsp, mux: http.NewServeMux()}
+func NewServer(ix *Index) *Server {
+	s := &Server{ix: ix, mux: http.NewServeMux()}
 	sub, _ := fs.Sub(assets, "web")
 	s.mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(sub))))
 	s.mux.HandleFunc("/static/themes.css", s.handleThemes)
 	s.mux.HandleFunc("/", s.handleIndex)
 	s.mux.HandleFunc("/api/meta", s.handleMeta)
-	s.mux.HandleFunc("/api/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/api/tree", s.handleTree)
 	s.mux.HandleFunc("/api/find", s.handleFind)
 	s.mux.HandleFunc("/api/file", s.handleFile)
 	s.mux.HandleFunc("/api/close", s.handleClose)
 	s.mux.HandleFunc("/api/raw", s.handleRaw)
-	s.mux.HandleFunc("/api/markdown", s.handleMarkdown)
 	s.mux.HandleFunc("/api/diff", s.handleDiff)
 	s.mux.HandleFunc("/api/gutter", s.handleGutter)
 	s.mux.HandleFunc("/api/search", s.handleSearch)
-	s.mux.HandleFunc("/api/outline", s.handleOutline)
-	s.mux.HandleFunc("/api/def", s.handleDef)
 	s.mux.HandleFunc("/api/reindex", s.handleReindex)
 	s.mux.HandleFunc("/api/file/save", s.handleFileSave)
 	s.mux.HandleFunc("/api/file/rename", s.handleFileRename)
 	s.mux.HandleFunc("/api/highlight", s.handleHighlight)
-	s.mux.HandleFunc("/api/lsp/def", s.handleLSPDef)
-	s.mux.HandleFunc("/api/lsp/refs", s.handleLSPRefs)
-	s.mux.HandleFunc("/api/lsp/calls", s.handleLSPCalls)
-	s.mux.HandleFunc("/api/lsp/symbols", s.handleLSPSymbols)
-	s.mux.HandleFunc("/api/lsp/hover", s.handleLSPHover)
-	s.mux.HandleFunc("/api/lsp/warm", s.handleLSPWarm)
-	s.mux.HandleFunc("/api/lsp/setup", s.handleLSPSetup)
-	s.mux.HandleFunc("/api/lsp/install", s.handleLSPInstall)
-	s.mux.HandleFunc("/api/lsp/start", s.handleLSPStart)
-	s.mux.HandleFunc("/api/agent/harnesses", s.handleAgentHarnesses)
-	s.mux.HandleFunc("/api/agent/select", s.handleAgentSelect)
-	s.mux.HandleFunc("/api/agent/edit", s.handleAgentEdit)
-	s.mux.HandleFunc("/api/agent/batch", s.handleAgentBatchEdit)
-	s.mux.HandleFunc("/api/agent/job", s.handleAgentJob)
-	s.mux.HandleFunc("/api/agent/cancel", s.handleAgentCancel)
-	s.mux.HandleFunc("/api/settings", s.handleSettings)
+	s.mux.HandleFunc("/api/git/status", s.handleGitStatus)
+	s.mux.HandleFunc("/api/git/diff", s.handleGitDiffScoped)
+	s.mux.HandleFunc("/api/git/stage", s.handleGitStage)
+	s.mux.HandleFunc("/api/git/unstage", s.handleGitUnstage)
+	s.mux.HandleFunc("/api/git/discard", s.handleGitDiscard)
+	s.mux.HandleFunc("/api/git/stage-all", s.handleGitStageAll)
+	s.mux.HandleFunc("/api/git/unstage-all", s.handleGitUnstageAll)
+	s.mux.HandleFunc("/api/git/discard-all", s.handleGitDiscardAll)
+	s.mux.HandleFunc("/api/git/commit", s.handleGitCommit)
+	s.mux.HandleFunc("/api/git/commit-message", s.handleGitCommitMessage)
 	s.lastReq.Store(time.Now().UnixNano())
 	go s.scavenge()
 	return s
@@ -162,17 +148,8 @@ func (s *Server) safePath(rel string) (string, string, bool) {
 	return abs, filepath.ToSlash(clean), true
 }
 
-// resolvePath is safePath plus the one documented exception: an absolute path a
-// language server named as a definition target, such as a file in the standard
-// library or the module cache. Nothing else outside the root is reachable.
+// resolvePath resolves a client-supplied relative path inside the root.
 func (s *Server) resolvePath(p string) (string, string, bool) {
-	if filepath.IsAbs(filepath.FromSlash(p)) {
-		abs := filepath.Clean(filepath.FromSlash(p))
-		if s.lsp.Allowed(abs) {
-			return abs, filepath.ToSlash(abs), true
-		}
-		return "", "", false
-	}
 	return s.safePath(p)
 }
 
@@ -192,17 +169,30 @@ func fail(w http.ResponseWriter, code int, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-// SetAgent makes editing through a coding harness available. Unavailable
-// unless main wires it; available still means nothing runs until a harness is
-// picked, in the UI or with -agent.
-func (s *Server) SetAgent(a *agentManager) { s.agent = a }
-
-// agentHarnesses is the picker's list, empty when editing is unavailable.
-func (s *Server) agentHarnesses() []agentHarness {
-	if s.agent == nil {
-		return []agentHarness{}
+// localPost admits a request that changes the machine only when it is a POST
+// from px1's own page. Browsers send Origin on every POST, so a page from
+// another site cannot pass. Requiring the Host to be an IP address or
+// localhost also shuts out DNS rebinding, where an attacker's domain is
+// pointed at this machine and its Origin would otherwise match.
+func localPost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		fail(w, http.StatusMethodNotAllowed, "POST only")
+		return false
 	}
-	return s.agent.Detect()
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host != "localhost" && net.ParseIP(host) == nil {
+		fail(w, http.StatusForbidden, "open px1 by IP address or localhost to change files")
+		return false
+	}
+	if o, err := url.Parse(r.Header.Get("Origin")); err != nil || o.Host != r.Host {
+		fail(w, http.StatusForbidden, "request did not come from px1")
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -245,225 +235,15 @@ func (s *Server) handleThemes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	n, at, ms := s.ix.Stats()
 	writeJSON(w, map[string]any{
-		"root":        s.ix.Root(),
-		"name":        filepath.Base(s.ix.Root()),
-		"files":       n,
-		"indexMs":     ms,
-		"builtAt":     at,
-		"ready":       s.ix.Ready(),
-		"git":         gitAvailable(s.ix.Root()),
-		"lspServers":  s.lsp.Available(),
-		"metrics":     getProcessMetrics(),
-		"version":     version,
-		"agent":       s.agent.Name(),
-		"agentModel":  s.agent.Model(),
-		"agentPinned": s.agent.Pinned(),
-		"agents":      []agentHarness{},
+		"root":    s.ix.Root(),
+		"name":    filepath.Base(s.ix.Root()),
+		"files":   n,
+		"indexMs": ms,
+		"builtAt": at,
+		"ready":   s.ix.Ready(),
+		"git":     gitAvailable(s.ix.Root()),
+		"version": version,
 	})
-}
-
-func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, getProcessMetrics())
-}
-
-// lspCtx bounds how long a caller is willing to wait. Language servers can take
-// tens of seconds to index a large workspace on first use, so the budget is
-// generous but always finite.
-func lspCtx(r *http.Request) (context.Context, context.CancelFunc) {
-	ms, _ := strconv.Atoi(r.URL.Query().Get("wait"))
-	if ms <= 0 {
-		ms = 10000
-	}
-	if ms > 120000 {
-		ms = 120000
-	}
-	return context.WithTimeout(r.Context(), time.Duration(ms)*time.Millisecond)
-}
-
-// lspPos pulls the shared path/line/col arguments. col arrives in UTF-16 code
-// units because that is what JavaScript string offsets count.
-func (s *Server) lspPos(r *http.Request) (abs, rel string, line, col int, ok bool) {
-	q := r.URL.Query()
-	abs, rel, ok = s.resolvePath(q.Get("path"))
-	if !ok {
-		return
-	}
-	line, _ = strconv.Atoi(q.Get("line"))
-	col, _ = strconv.Atoi(q.Get("col"))
-	if line < 1 {
-		line = 1
-	}
-	if col < 0 {
-		col = 0
-	}
-	return abs, rel, line, col, true
-}
-
-func (s *Server) lspRespond(w http.ResponseWriter, rel string, hits []NavHit, err error) {
-	state, server := s.lsp.State(rel)
-	if err != nil {
-		writeJSON(w, map[string]any{
-			"hits": []NavHit{}, "state": string(state), "server": server,
-			"error": err.Error(),
-		})
-		return
-	}
-	if hits == nil {
-		hits = []NavHit{}
-	}
-	writeJSON(w, map[string]any{"hits": hits, "state": string(state), "server": server})
-}
-
-func (s *Server) handleLSPDef(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	abs, rel, line, col, ok := s.lspPos(r)
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	ctx, cancel := lspCtx(r)
-	defer cancel()
-	hits, err := s.lsp.Definition(ctx, abs, rel, line, col)
-	if uiVerbose {
-		dur := fmtDuration(time.Since(start))
-		if len(hits) == 1 {
-			dest := fmt.Sprintf("%s:%d", hits[0].Path, hits[0].Line)
-			uiStatus("info", "lsp def", fmt.Sprintf("%s:%d:%d -> %s  (%s)", rel, line, col, dest, dur), 0, os.Stdout)
-		} else {
-			uiStatus("info", "lsp def", fmt.Sprintf("%s:%d:%d · %d hits  (%s)", rel, line, col, len(hits), dur), 0, os.Stdout)
-		}
-	}
-	s.lspRespond(w, rel, hits, err)
-}
-
-func (s *Server) handleLSPRefs(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	abs, rel, line, col, ok := s.lspPos(r)
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	ctx, cancel := lspCtx(r)
-	defer cancel()
-	hits, err := s.lsp.References(ctx, abs, rel, line, col)
-	if uiVerbose {
-		dur := fmtDuration(time.Since(start))
-		files := make(map[string]bool)
-		for _, h := range hits {
-			files[h.Path] = true
-		}
-		uiStatus("info", "lsp refs", fmt.Sprintf("%s:%d:%d · %d refs in %d files  (%s)", rel, line, col, len(hits), len(files), dur), 0, os.Stdout)
-	}
-	s.lspRespond(w, rel, hits, err)
-}
-
-// handleLSPCalls serves call trails. Without item it resolves the function at
-// path/line/col into trail roots; with item (a node's opaque item, echoed back)
-// it expands that node into callers, or callees when dir=out. path always names
-// the file the trail started in, which picks the language server.
-func (s *Server) handleLSPCalls(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	abs, rel, line, col, ok := s.lspPos(r)
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	ctx, cancel := lspCtx(r)
-	defer cancel()
-	q := r.URL.Query()
-	var nodes []CallNode
-	var err error
-	if item := q.Get("item"); item != "" {
-		nodes, err = s.lsp.Calls(ctx, rel, item, q.Get("dir") == "out")
-	} else {
-		nodes, err = s.lsp.PrepareCalls(ctx, abs, rel, line, col)
-	}
-	if nodes == nil {
-		nodes = []CallNode{}
-	}
-	state, server := s.lsp.State(rel)
-	resp := map[string]any{"nodes": nodes, "state": string(state), "server": server}
-	if err != nil {
-		resp["error"] = err.Error()
-	}
-	if uiVerbose {
-		dir := "callers"
-		if q.Get("dir") == "out" {
-			dir = "callees"
-		}
-		uiStatus("info", "lsp calls", fmt.Sprintf("%s:%d:%d (%s) · %d nodes  (%s)", rel, line, col, dir, len(nodes), fmtDuration(time.Since(start))), 0, os.Stdout)
-	}
-	writeJSON(w, resp)
-}
-
-// handleLSPWarm starts the server for this file type if it is not running and
-// reports where it has got to. Opening a file calls this so the server is awake
-// by the time the reader wants to hover or jump, and so the status indicator
-// reflects reality without anyone having to ask a question first.
-func (s *Server) handleLSPWarm(w http.ResponseWriter, r *http.Request) {
-	_, rel, ok := s.resolvePath(r.URL.Query().Get("path"))
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	ms, _ := strconv.Atoi(r.URL.Query().Get("wait"))
-	if ms <= 0 {
-		ms = 1
-	}
-	if ms > 60000 {
-		ms = 60000
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(ms)*time.Millisecond)
-	defer cancel()
-	// The spawn keeps going even when this call gives up waiting on it.
-	s.lsp.client(ctx, rel)
-	writeJSON(w, s.lspBrief(rel))
-}
-
-func (s *Server) handleLSPHover(w http.ResponseWriter, r *http.Request) {
-	abs, rel, line, col, ok := s.lspPos(r)
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	ctx, cancel := lspCtx(r)
-	defer cancel()
-	info, err := s.lsp.Hover(ctx, abs, rel, line, col)
-	state, srv := s.lsp.State(rel)
-	if err != nil || info == nil {
-		msg := ""
-		if err != nil {
-			msg = err.Error()
-		}
-		writeJSON(w, map[string]any{"empty": true, "state": string(state), "server": srv, "error": msg})
-		return
-	}
-	writeJSON(w, map[string]any{
-		"signature": info.Signature, "doc": info.Doc, "empty": info.Empty,
-		"state": string(state), "server": srv,
-	})
-}
-
-func (s *Server) handleLSPSymbols(w http.ResponseWriter, r *http.Request) {
-	abs, rel, ok := s.resolvePath(r.URL.Query().Get("path"))
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	ctx, cancel := lspCtx(r)
-	defer cancel()
-	syms, err := s.lsp.Symbols(ctx, abs, rel)
-	state, server := s.lsp.State(rel)
-	if err != nil {
-		writeJSON(w, map[string]any{
-			"symbols": []Symbol{}, "state": string(state), "server": server, "error": err.Error(),
-		})
-		return
-	}
-	if syms == nil {
-		syms = []Symbol{}
-	}
-	writeJSON(w, map[string]any{"symbols": syms, "state": string(state), "server": server})
 }
 
 func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
@@ -561,9 +341,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		"path": rel, "lang": d.Lang, "total": d.Total, "maxCols": d.MaxCols,
 		"start": start, "lines": lines, "size": st.Size(),
 		"exact": exact, "refine": !exact && coming,
-		"markdown":      isMarkdown(rel),
 		"diffAvailable": diffAvail,
-		"lsp":           s.lspBrief(rel),
 		"mtime":         st.ModTime().UnixMilli(),
 		"editable":      st.Size() <= maxEditBytes,
 	})
@@ -577,7 +355,6 @@ func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Evict(abs)
-	s.lsp.CloseDoc(abs, rel)
 	debug.FreeOSMemory()
 	writeJSON(w, map[string]any{"ok": true, "path": rel})
 }
@@ -683,94 +460,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"results": res, "files": len(res), "total": total, "truncated": truncated})
 }
 
-func (s *Server) handleOutline(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	abs, rel, ok := s.resolvePath(r.URL.Query().Get("path"))
-	if !ok {
-		fail(w, 400, "bad path")
-		return
-	}
-	syms, err := Outline(abs, rel)
-	if err != nil {
-		fail(w, 404, err.Error())
-		return
-	}
-	if syms == nil {
-		syms = []Symbol{}
-	}
-	if uiVerbose {
-		uiStatus("info", "outline", fmt.Sprintf("%s · %d symbols  (%s)", rel, len(syms), fmtDuration(time.Since(start))), 0, os.Stdout)
-	}
-	writeJSON(w, map[string]any{"path": rel, "symbols": syms})
-}
-
-// handleDef approximates go-to-definition: a whole-word search across the
-// index, with lines that look like declarations floated to the top.
-func (s *Server) handleDef(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	sym := strings.TrimSpace(r.URL.Query().Get("sym"))
-	if sym == "" {
-		fail(w, 400, "no symbol")
-		return
-	}
-	res, _, err := SearchContext(r.Context(), s.ix, SearchOpts{
-		Query: sym, Word: true, Case: true,
-		MaxFiles: 400, MaxPerFil: 20, classifyDefs: true,
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || r.Context().Err() != nil {
-			return
-		}
-		fail(w, 400, err.Error())
-		return
-	}
-	type hit struct {
-		Path string `json:"path"`
-		Match
-	}
-	var defs []hit
-	refs := 0
-	seen := map[string]bool{}
-	for _, f := range res {
-		for _, m := range f.Matches {
-			if !m.Def {
-				refs++
-				continue
-			}
-			// One entry per declaring line, however often the name repeats on it.
-			k := f.Path + ":" + strconv.Itoa(m.Line)
-			if seen[k] {
-				continue
-			}
-			seen[k] = true
-			defs = append(defs, hit{f.Path, m})
-		}
-	}
-	// Prefer declarations in files whose name echoes the symbol.
-	low := strings.ToLower(sym)
-	sort.SliceStable(defs, func(i, j int) bool {
-		a := strings.Contains(strings.ToLower(filepath.Base(defs[i].Path)), low)
-		b := strings.Contains(strings.ToLower(filepath.Base(defs[j].Path)), low)
-		return a && !b
-	})
-	state, server := s.lsp.State(r.URL.Query().Get("path"))
-	if defs == nil {
-		defs = []hit{}
-	}
-	if uiVerbose {
-		dur := fmtDuration(time.Since(start))
-		defStr := "definitions"
-		if len(defs) == 1 {
-			defStr = "definition"
-		}
-		uiStatus("info", "def", fmt.Sprintf("%q · %d %s, %d refs  (%s)", sym, len(defs), defStr, refs, dur), 0, os.Stdout)
-	}
-	writeJSON(w, map[string]any{
-		"symbol": sym, "defs": defs, "refCount": refs,
-		"lsp": map[string]any{"state": string(state), "server": server},
-	})
-}
-
 func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	EvictAll()
 	s.ix.Build()
@@ -778,66 +467,195 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"files": n, "indexMs": ms})
 }
 
-func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, map[string]any{
-			"settings": readMergedSettingsMap(),
-			"defaults": defaultSettingsMap(),
-			"schema":   settingsSchema,
-			"raw":      readRawSettingsJSON(),
-			"path":     settingsPath(),
-		})
-	case http.MethodPost:
-		if !localPost(w, r) {
-			return
-		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
-		if err != nil {
-			fail(w, 400, "failed to read body")
-			return
-		}
-		var payload map[string]any
-		if len(body) > 0 {
-			if err := json.Unmarshal(body, &payload); err != nil {
-				fail(w, 400, "invalid JSON: "+err.Error())
-				return
-			}
-		} else {
-			payload = make(map[string]any)
-			for k, vs := range r.URL.Query() {
-				if len(vs) > 0 {
-					payload[k] = vs[0]
-				}
-			}
-		}
-
-		if rawStr, ok := payload["raw"].(string); ok {
-			if err := saveRawSettingsJSON([]byte(rawStr)); err != nil {
-				fail(w, 400, "invalid JSON in settings: "+err.Error())
-				return
-			}
-		} else {
-			if err := updateSettingsMap(payload); err != nil {
-				fail(w, 500, err.Error())
-				return
-			}
-		}
-
-		if s.agent != nil {
-			currentSettings := readSettings()
-			if currentSettings.Agent != "" && currentSettings.Agent != s.agent.Name() {
-				_ = s.agent.Select(currentSettings.Agent, s.agent.Model())
-			}
-		}
-
-		writeJSON(w, map[string]any{
-			"settings": readMergedSettingsMap(),
-			"raw":      readRawSettingsJSON(),
-			"path":     settingsPath(),
-			"ok":       true,
-		})
-	default:
-		fail(w, 405, "method not allowed")
+// handleGitStatus lists every changed file with staged/unstaged status
+// separated, for the source-control panel.
+func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
+	files := gitStatusXY(s.ix.Root())
+	if files == nil {
+		files = []GitFileStatus{}
 	}
+	writeJSON(w, map[string]any{"files": files, "available": gitAvailable(s.ix.Root())})
+}
+
+// handleGitDiffScoped is separate from handleDiff (which diffs a file against
+// HEAD for the gutter/diff-view) because the SCM panel needs staged and
+// unstaged changes to the same file shown independently. scope=staged|worktree.
+func (s *Server) handleGitDiffScoped(w http.ResponseWriter, r *http.Request) {
+	_, rel, ok := s.safePath(r.URL.Query().Get("path"))
+	if !ok {
+		fail(w, 400, "bad path")
+		return
+	}
+	var diff string
+	if r.URL.Query().Get("scope") == "staged" {
+		diff = gitDiffCached(s.ix.Root(), rel)
+	} else {
+		diff = gitDiffUnstaged(s.ix.Root(), rel)
+	}
+	writeJSON(w, map[string]any{"path": rel, "diff": diff, "available": diff != ""})
+}
+
+func (s *Server) handleGitStage(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	_, rel, ok := s.safePath(r.URL.Query().Get("path"))
+	if !ok || rel == "" {
+		fail(w, 400, "bad path")
+		return
+	}
+	if err := gitStage(s.ix.Root(), rel); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "path": rel})
+}
+
+func (s *Server) handleGitUnstage(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	_, rel, ok := s.safePath(r.URL.Query().Get("path"))
+	if !ok || rel == "" {
+		fail(w, 400, "bad path")
+		return
+	}
+	if err := gitUnstage(s.ix.Root(), rel); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "path": rel})
+}
+
+func (s *Server) handleGitDiscard(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	_, rel, ok := s.safePath(r.URL.Query().Get("path"))
+	if !ok || rel == "" {
+		fail(w, 400, "bad path")
+		return
+	}
+	if err := gitDiscard(s.ix.Root(), rel); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "path": rel})
+}
+
+// readGitPaths resolves a POST body of {"paths": [...]} into repo-relative
+// paths, rejecting the request if any entry falls outside the served root.
+func (s *Server) readGitPaths(w http.ResponseWriter, r *http.Request) ([]string, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	if err != nil {
+		fail(w, 400, "failed to read body")
+		return nil, false
+	}
+	var payload struct {
+		Paths []string `json:"paths"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &payload); err != nil {
+			fail(w, 400, "invalid JSON: "+err.Error())
+			return nil, false
+		}
+	}
+	rels := make([]string, 0, len(payload.Paths))
+	for _, p := range payload.Paths {
+		_, rel, ok := s.safePath(p)
+		if !ok || rel == "" {
+			fail(w, 400, "bad path: "+p)
+			return nil, false
+		}
+		rels = append(rels, rel)
+	}
+	return rels, true
+}
+
+func (s *Server) handleGitStageAll(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	paths, ok := s.readGitPaths(w, r)
+	if !ok {
+		return
+	}
+	if err := gitStageAll(s.ix.Root(), paths); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "count": len(paths)})
+}
+
+func (s *Server) handleGitUnstageAll(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	paths, ok := s.readGitPaths(w, r)
+	if !ok {
+		return
+	}
+	if err := gitUnstageAll(s.ix.Root(), paths); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "count": len(paths)})
+}
+
+func (s *Server) handleGitDiscardAll(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	paths, ok := s.readGitPaths(w, r)
+	if !ok {
+		return
+	}
+	if err := gitDiscardAll(s.ix.Root(), paths); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "count": len(paths)})
+}
+
+func (s *Server) handleGitCommit(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		fail(w, 400, "failed to read body")
+		return
+	}
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &payload); err != nil {
+			fail(w, 400, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	if strings.TrimSpace(payload.Message) == "" {
+		fail(w, 400, "empty commit message")
+		return
+	}
+	if err := gitCommit(s.ix.Root(), payload.Message); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleGitCommitMessage(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	msg, err := generateCommitMessage(ctx, s.ix.Root())
+	if err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"message": msg})
 }

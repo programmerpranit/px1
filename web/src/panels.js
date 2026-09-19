@@ -1,9 +1,8 @@
 // web/src/panels.js
-import { $, $$, S, api } from './state.js';
+import { $, S, api } from './state.js';
 import { layout, render } from './renderer.js';
 import { updateStatus } from './status.js';
-import { loadOutline } from './outline.js';
-import { treeEl, refreshTree } from './tree.js';
+import { refreshTree } from './tree.js';
 import { reloadOpenTabs } from './tabs.js';
 import { showToast } from './ui.js';
 

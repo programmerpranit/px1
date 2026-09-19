@@ -1,12 +1,12 @@
 # File Updates & In-Place Tab Reloading
 
-This document details the end-to-end architecture, performance optimizations, and edge-case handling for workspace file updates and tab reloading ([`web/src/tabs.js`](../../web/src/tabs.js), [`web/src/panels.js`](../../web/src/panels.js), [`server.go`](../../server.go), and [`highlight.go`](../../highlight.go)), introduced in commit `c33376b4b43b2ae3ecbc6fedd45b9dee0726a401`.
+This document details the end-to-end architecture, performance optimizations, and edge-case handling for workspace file updates and tab reloading ([`web/src/tabs.js`](../../web/src/tabs.js), [`web/src/panels.js`](../../web/src/panels.js), [`server.go`](../../server.go), and [`highlight.go`](../../highlight.go)).
 
 ---
 
 ## 1. Problem Statement & Motivation
 
-Most file mutations (such as `git checkout`, `git pull`, branch switching, code generation, or edits from an external IDE) occur on the host filesystem outside of px0's process boundary. Edits px0 dispatches to a coding harness reuse the same reload path once they finish (see [Harness Editing & Agent Dispatch](agent-editing.md)).
+Most file mutations (such as `git checkout`, `git pull`, branch switching, or edits from an external editor) occur on the host filesystem outside of px1's process boundary.
 
 Users trigger a workspace re-index by clicking the **Re-index** button (`#btn-reindex` in the sidebar header) or via the Command Palette (`Mod+K` &rarr; `Re-index Workspace`).
 
@@ -15,7 +15,7 @@ Users trigger a workspace re-index by clicking the **Re-index** button (`#btn-re
 Prior to this implementation:
 1. Re-indexing rescanned the directory tree via `POST /api/reindex` and redrew the file explorer.
 2. **Open tabs remained stale**: The document objects in memory (`S.tabs`) retained old file lines, stale line totals, outdated git diff annotations, and previous syntax highlighting states.
-3. If an open file was edited or truncated on disk, px0 showed stale cached lines. If the file shrank, attempting to scroll or jump to previous line numbers resulted in blank lines or out-of-bounds errors.
+3. If an open file was edited or truncated on disk, px1 showed stale cached lines. If the file shrank, attempting to scroll or jump to previous line numbers resulted in blank lines or out-of-bounds errors.
 4. Users were forced to manually close and re-open every tab, or execute a full browser reload (which destroyed active tabs, cursor positions, navigation history, and scroll offsets).
 5. Simply re-running `openFile()` in a loop across open tabs was unacceptable: it caused jarring tab-switching UI flicker, multiple full-DOM layout calculations, scroll resets, and history stack pollution.
 
@@ -49,7 +49,6 @@ sequenceDiagram
     rect rgb(30, 35, 45)
         note over Tabs: Step 1: Pre-flight Snapshotting
         Tabs->>Tabs: Capture live activeDoc.scrollTop from vp.scrollTop
-        Tabs->>Tabs: If previewing markdown: capture mdview.scrollTop
         Tabs->>Tabs: Compute chunk start for each open tab based on cur anchor
     end
 
@@ -62,28 +61,30 @@ sequenceDiagram
         else File Unchanged
             Cache-->>Server: Cache hit -> Return memoized Doc
         end
-        Server-->>Tabs: Return JSON payload {total, lines, maxCols, diffAvailable, lsp}
+        Server-->>Tabs: Return JSON payload {total, lines, maxCols, diffAvailable}
     end
 
     rect rgb(30, 45, 35)
         note over Tabs: Step 3: In-Place Document Construction & Reconciliation
         loop For each target tab
             Tabs->>Tabs: Validate tab still open (S.tabs.indexOf(oldDoc) >= 0)
+            Tabs->>Tabs: Skip if the tab has an unsaved in-place edit (buf.dirty)
             Tabs->>Tabs: Clamp cur line to new total (Math.min(cur, total))
             Tabs->>Tabs: Preserve diffMode, diffDismissed, and col
             Tabs->>Tabs: Construct new doc object d & populate line chunk
             Tabs->>Tabs: S.tabs[idx] = d (replace in-place without tab switch)
-            Tabs->>Tabs: Dispatch background refineChunk() & loadGutter()
+            Tabs->>Tabs: Dispatch background refineChunk() if the chunk was an inexact pass
         end
+        Tabs->>Server: Promise.allSettled(loadGutter(t)) for every non-image tab
     end
 
     rect rgb(45, 35, 35)
         note over Tabs,Renderer: Step 4: Single-Pass Resync & Viewport Restoration
-        Tabs->>Tabs: Sync active doc LSP, Markdown preview, and Diff views
+        Tabs->>Tabs: syncImageView(), syncDiffView(true)
         Tabs->>Renderer: layout() (recalculate sizer height/width)
         Tabs->>Tabs: Restore vp.scrollTop = d.scrollTop
         Tabs->>Renderer: render() (virtualized rows mount)
-        Tabs->>Tabs: Re-fetch Outline if active, drawTabs(), drawCrumbs(), updateStatus()
+        Tabs->>Tabs: drawTabs(), drawCrumbs(), updateStatus(), saveWorkspaceState()
     end
 ```
 
@@ -97,21 +98,14 @@ Before issuing any network requests, `reloadOpenTabs` captures volatile DOM scro
 
 ```javascript
 const activeDoc = doc_();
-if (activeDoc) {
-  activeDoc.scrollTop = vp.scrollTop;
-  if (previewing(activeDoc)) {
-    const mv = $('#mdview');
-    if (mv) activeDoc.mdScroll = mv.scrollTop;
-  }
-}
+if (activeDoc) activeDoc.scrollTop = vp.scrollTop;
 ```
 
 - **Viewport DOM Offset**: While `activeDoc.scrollTop` is maintained in memory during tab switches, native mouse-wheel or trackpad scrolling mutates `vp.scrollTop` directly. Snapshotting guarantees the live scroll offset is preserved.
-- **Markdown Preview Offset**: Markdown preview uses a decoupled overlay container (`#mdview`). Its scroll offset is independent of the editor virtualizer `#viewport`, so `mdScroll` is recorded separately.
 
 ### Step 2: Virtualized Chunk Target Calculation
 
-Instead of fetching entire files, px0 leverages its windowed virtualization architecture (`CHUNK = 1000` lines):
+Instead of fetching entire files, px1 leverages its windowed virtualization architecture (`CHUNK = 1000` lines):
 
 ```javascript
 const targets = S.tabs.map(t => ({
@@ -123,7 +117,7 @@ const targets = S.tabs.map(t => ({
 ```
 
 - Each tab's current viewing line (`t.cur`) acts as the anchor.
-- px0 calculates the precise 1000-line chunk boundary enclosing that anchor:
+- px1 calculates the precise 1000-line chunk boundary enclosing that anchor:
   $$\text{start} = \left\lfloor \frac{\text{cur} - 1}{\text{CHUNK}} \right\rfloor \times \text{CHUNK}$$
 - Offscreen chunks are not requested upfront; they load on-demand when scrolled into view via `ensureChunk()`.
 
@@ -179,38 +173,35 @@ const hasDiff = !!j.diffAvailable;
 const newCur = Math.max(1, Math.min(keep.cur || 1, j.total));
 ```
 
+- **Unsaved Edits Are Never Clobbered**: Before anything else, a tab with an in-flight in-place edit is skipped outright — `if (tgt.oldDoc.buf?.dirty) continue;`. There is nothing on disk yet that should take priority over text the user is actively editing (e.g. a reindex triggered by an unrelated change elsewhere in the workspace, or a rename of a different file).
 - **In-Place Mutation**: `S.tabs[idx] = d` swaps the document instance inside the array directly. The active tab index (`S.active`) remains unchanged, completely avoiding tab activation events.
 - **New Line Buffer**: A new array `d.lines = new Array(j.total)` is allocated to the new line count, and the returned lines are inserted at `j.start`.
 - **Chunk Tracking**: `d.chunks = new Set([tgt.start / CHUNK])` records the refreshed chunk. All other chunks are cleared so they fetch fresh content if scrolled into view.
-- **Gutter & Lexer Refinement**: `loadGutter(d)` is dispatched to fetch fresh Git line diff markers, and `refineChunk(d, ...)` is called if Chroma emitted an inexact first-pass window.
+- **Lexer Refinement**: `refineChunk(d, ...)` is dispatched per tab if Chroma emitted an inexact first-pass window. Gutter markers are refreshed afterward, in one batched `Promise.allSettled(loadGutter(t))` pass over every non-image tab rather than per-tab, so the diff subprocess calls overlap instead of serializing.
 
 ### Step 6: Active Document Resynchronization & Single-Pass Render
 
-Once all tabs have been updated in memory, px0 updates the view surface:
+Once all tabs have been updated in memory, px1 updates the view surface:
 
 ```javascript
 const d = doc_();
 if (d) {
-  S.lsp.state = (d.lsp && d.lsp.state) || 'off';
-  S.lsp.server = (d.lsp && d.lsp.server) || '';
-  S.lsp.missing = (d.lsp && d.lsp.missing) || '';
-  warmLSP(d);
-  syncPreview();
-  syncDiffView();
+  syncImageView();
+  syncDiffView(true);
   layout();
   vp.scrollTop = d.scrollTop;
   render();
-  if ($('#panel-outline')?.classList.contains('active')) loadOutline();
 }
 
 drawTabs();
 drawCrumbs();
 updateStatus();
+saveWorkspaceState();
 ```
 
 - **Single Layout & Paint Budget**: Rather than re-rendering for each tab, a single `layout()` recalculates the sizer dimensions and a single `render()` mounts the ~60 visible rows into the DOM.
 - **Viewport Scroll Restoration**: `vp.scrollTop = d.scrollTop` restores the user's exact scroll position on the freshly-sized canvas.
-- **Outline Panel Resync**: If the symbol outline sidebar is active, `loadOutline()` re-extracts declarations against the updated file.
+- **Workspace State Persistence**: `saveWorkspaceState()` writes the refreshed tab list to `sessionStorage` (`px1.tabs`) so a page reload restores the same open tabs.
 
 ---
 
@@ -231,7 +222,7 @@ updateStatus();
 
 ### 1. Concurrent Tab Closure during In-Flight Network Requests
 - **Problem**: While `Promise.allSettled` is waiting on HTTP responses, the user might close one or more tabs.
-- **Solution**: px0 looks up the index dynamically using the object reference captured before the request:
+- **Solution**: px1 looks up the index dynamically using the object reference captured before the request:
   ```javascript
   const idx = S.tabs.indexOf(tgt.oldDoc);
   if (idx < 0) continue;
@@ -259,14 +250,14 @@ updateStatus();
   diffDismissed: !!keep.diffDismissed || !keep.diffMode,
   diffScroll: keep === activeDoc && keep.diffMode ? diffScrollTop() : 0,
   ```
-  - A tab in source view stays in source, even when the reload finds new changes (for example after an agent edit). It is marked `diffDismissed`, so `loadGutter()` does not switch it to the diff either. The Diff button is one click away.
-  - A tab in the diff view keeps its split or unified layout, and the active tab's diff scroll offset is restored once the new diff renders.
+  - A tab in source view stays in source, even when the reload finds new changes (for example after switching branches externally). It is marked `diffDismissed`, so `loadGutter()` does not switch it to the diff either. The Diff button is one click away.
+  - A tab in the diff view stays in the diff view, and the active tab's diff scroll offset is restored once the new diff renders.
   - If changes were committed externally, `hasDiff` evaluates to `false`, and `diffMode` cleanly resets to `null`.
   - Opening a file fresh is unaffected: a modified file still opens in the diff view.
 
-### 5. Markdown Preview Scroll Offset Preservation
-- **Problem**: In Markdown preview mode (`#mdview`), the preview is rendered inside an independent HTML container rather than the virtualized line scroller (`#viewport`). Re-rendering resets scroll containers to `0`.
-- **Solution**: `reloadOpenTabs` captures `activeDoc.mdScroll = $('#mdview').scrollTop` during pre-flight and passes `mdScroll: keep.mdScroll || 0` to the new document state, which `syncPreview()` restores upon re-render.
+### 5. In-Flight Edits Are Never Overwritten
+- **Problem**: A reindex can be triggered (manually, or by another tab's save) while the user is mid-edit in a different open tab. Blindly replacing that tab's document with a fresh server fetch would silently discard unsaved keystrokes.
+- **Solution**: `reloadOpenTabs` checks `tgt.oldDoc.buf?.dirty` before doing anything else with a tab and skips it outright if true, leaving the in-memory edit buffer untouched. The tab simply reflects the latest disk content once it's saved (`Mod+S`) or otherwise stops being dirty.
 
 ### 6. Binary & Image Tab Protection
 - **Problem**: If a file extension was replaced with an image or binary file, passing it to the text virtualization buffer would corrupt line array parsing.
