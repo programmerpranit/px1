@@ -97,6 +97,17 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 #scm-commit-btn:hover:not(:disabled) { opacity: .88; }
 #scm-commit-btn:disabled, #scm-generate:disabled { opacity: .5; cursor: default; }
 .scm-err { font: 11px var(--mono); color: var(--err); padding: 2px 1px; }
+.scm-sync {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 12px; border-bottom: 1px solid var(--line);
+  background: var(--bg2); font: 11.5px var(--ui); color: var(--dim);
+}
+#scm-push-btn {
+  flex: none; font: 11px var(--ui); font-weight: 600; padding: 4px 10px; border-radius: 4px;
+  background: var(--accent); color: var(--on-accent);
+}
+#scm-push-btn:hover:not(:disabled) { opacity: .88; }
+#scm-push-btn:disabled { opacity: .5; cursor: default; }
 .scm-group-head {
   padding: 7px 12px 4px; font: 600 10.5px/1 var(--ui); letter-spacing: .04em;
   text-transform: uppercase; color: var(--faint);

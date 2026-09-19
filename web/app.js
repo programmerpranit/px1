@@ -2209,6 +2209,9 @@ const groupsEl = $('#scm-groups');
 const messageEl = $('#scm-message');
 const errEl = $('#scm-err');
 const badgeEl = $('#scm-badge');
+const syncEl = $('#scm-sync');
+const syncTextEl = $('#scm-sync-text');
+const pushBtn = $('#scm-push-btn');
 
 const STATUS_LABEL = { A: 'A', M: 'M', D: 'D', R: 'R', C: 'C', '!': '!', U: 'U' };
 
@@ -2283,6 +2286,7 @@ async function loadScmStatus() {
 
   if (!files.length) {
     groupsEl.innerHTML = '<div class="hint">No changes.</div>';
+    await checkSyncStatus();
     return;
   }
 
@@ -2298,6 +2302,50 @@ async function loadScmStatus() {
   html += groupHead('Changes', unstaged.length, unstagedActions);
   html += unstaged.length ? unstaged.map(f => fileRow(f, false)).join('') : '<div class="hint">No unstaged changes.</div>';
   groupsEl.innerHTML = html;
+
+  await checkSyncStatus();
+}
+
+// Shown after a commit (or any panel refresh) when the branch has a remote
+// tracking branch and has commits to push. Behind-only (nothing to push, e.g.
+// someone else pushed) is surfaced as text with no action -- pulling isn't
+// something this panel does.
+async function checkSyncStatus() {
+  if (!syncEl) return;
+  let st;
+  try {
+    st = await api('/api/git/sync-status');
+  } catch {
+    syncEl.hidden = true;
+    return;
+  }
+  if (!st.hasUpstream || (st.ahead === 0 && st.behind === 0)) {
+    syncEl.hidden = true;
+    return;
+  }
+  const parts = [];
+  if (st.ahead > 0) parts.push('↑' + st.ahead);
+  if (st.behind > 0) parts.push('↓' + st.behind);
+  syncTextEl.textContent = parts.join(' ') + ' vs ' + st.upstream;
+  if (pushBtn) pushBtn.hidden = st.ahead === 0;
+  syncEl.hidden = false;
+}
+
+async function push() {
+  if (!pushBtn) return;
+  pushBtn.disabled = true;
+  const label = pushBtn.textContent;
+  pushBtn.textContent = 'Pushing…';
+  try {
+    await apiPost('/api/git/push');
+    showToast('✓', 'Pushed');
+    await checkSyncStatus();
+  } catch (e) {
+    showToast('!', 'Push failed: ' + e.message);
+  } finally {
+    pushBtn.disabled = false;
+    pushBtn.textContent = label;
+  }
 }
 
 async function stage(path) {
@@ -2419,6 +2467,7 @@ function initScm() {
 
   $('#side-tab-files')?.addEventListener('click', () => { showFiles(); layout(); render(); });
   $('#side-tab-scm')?.addEventListener('click', () => { showScm(); layout(); render(); });
+  pushBtn?.addEventListener('click', push);
 
   groupsEl.addEventListener('click', e => {
     const groupBtn = e.target.closest('[data-scm-group-action]');

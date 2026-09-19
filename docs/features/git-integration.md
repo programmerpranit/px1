@@ -33,6 +33,7 @@ px1 provides non-destructive, zero-latency Git awareness. It queries Git status 
   - Per-group **Stage all** / **Unstage all** / **Discard all** buttons appear on hover, each running as a single atomic operation so a large batch never partially fails.
   - Click a file in either group to open it; open its diff with `Cmd/Ctrl+D`.
   - Write a commit message and click **Commit**, or click **Generate** to have px1 draft one from the staged diff (see below).
+  - When the branch has a remote tracking branch and is ahead of it, a banner (`↑N vs origin/main`) appears with a **Push** button. Behind-only shows as text with no action — px1 doesn't pull.
 
 ---
 
@@ -52,6 +53,7 @@ Once the changes look right:
 2. Stage the files that belong in this commit (individually, or **Stage all**).
 3. Click **Generate** to have px1 shell out to the `claude` CLI on the staged diff and draft a one-line Conventional Commits message — or write your own.
 4. Click **Commit**.
+5. If a push banner appears (the branch has a remote and is now ahead of it), click **Push**.
 
 ### Pre-Commit Review
 Before committing, open px1's Source Control panel to perform a visual walk-through of all pending changes. The changed-files filter in the file explorer isolates your work, ensuring you don't commit debug logs, temporary comments, or unintended formatting tweaks.

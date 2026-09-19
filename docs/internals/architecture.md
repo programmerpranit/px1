@@ -84,6 +84,8 @@ All `POST` endpoints below are gated by `localPost` (see the Security Model sect
 | `/api/git/discard-all`       | `POST` | Discard a batch of unstaged files in one call (body: `{paths}`)         | JSON (`{ok, count}`)                       |
 | `/api/git/commit`            | `POST` | `git commit -m` with the given message (body: `{message}`)              | JSON (`{ok}`)                              |
 | `/api/git/commit-message`    | `POST` | Shells out to the `claude` CLI on staged changes to draft a commit message | JSON (`{message}`)                      |
+| `/api/git/sync-status`       | `GET`  | How the current branch compares to its upstream                         | JSON (`{branch, upstream, hasUpstream, ahead, behind}`) |
+| `/api/git/push`              | `POST` | `git push`                                                               | JSON (`{ok}`)                              |
 
 ## 4. Memory Management & Proactive Scavenging
 

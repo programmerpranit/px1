@@ -75,6 +75,8 @@ func NewServer(ix *Index) *Server {
 	s.mux.HandleFunc("/api/git/discard-all", s.handleGitDiscardAll)
 	s.mux.HandleFunc("/api/git/commit", s.handleGitCommit)
 	s.mux.HandleFunc("/api/git/commit-message", s.handleGitCommitMessage)
+	s.mux.HandleFunc("/api/git/sync-status", s.handleGitSyncStatus)
+	s.mux.HandleFunc("/api/git/push", s.handleGitPush)
 	s.lastReq.Store(time.Now().UnixNano())
 	go s.scavenge()
 	return s
@@ -658,4 +660,21 @@ func (s *Server) handleGitCommitMessage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]any{"message": msg})
+}
+
+// handleGitSyncStatus reports how the current branch compares to its
+// upstream, so the SCM panel can offer to push right after a commit.
+func (s *Server) handleGitSyncStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, gitSyncStatus(s.ix.Root()))
+}
+
+func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	if err := gitPush(s.ix.Root()); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }

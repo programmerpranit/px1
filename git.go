@@ -429,6 +429,52 @@ func gitCommit(root, message string) error {
 	return nil
 }
 
+// GitSyncStatus reports how the current branch compares to its upstream, for
+// the SCM panel's "push" prompt after a commit. HasUpstream is false (with
+// Ahead/Behind left at 0) when the branch has no tracking branch configured —
+// not an error, just nothing to push against.
+type GitSyncStatus struct {
+	Branch      string `json:"branch"`
+	Upstream    string `json:"upstream"`
+	HasUpstream bool   `json:"hasUpstream"`
+	Ahead       int    `json:"ahead"`
+	Behind      int    `json:"behind"`
+}
+
+func gitSyncStatus(root string) GitSyncStatus {
+	branch, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return GitSyncStatus{}
+	}
+	st := GitSyncStatus{Branch: strings.TrimSpace(string(branch))}
+
+	upstream, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").Output()
+	if err != nil {
+		return st // no upstream configured
+	}
+	st.Upstream = strings.TrimSpace(string(upstream))
+	st.HasUpstream = true
+
+	out, err := exec.Command("git", "-C", root, "rev-list", "--left-right", "--count", "HEAD...@{u}").Output()
+	if err != nil {
+		return st
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) == 2 {
+		st.Ahead, _ = strconv.Atoi(parts[0])
+		st.Behind, _ = strconv.Atoi(parts[1])
+	}
+	return st
+}
+
+func gitPush(root string) error {
+	out, err := exec.Command("git", "-C", root, "push").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // gitHunks parses the unified diff of relpath against HEAD into 1-based
 // NEW-FILE line numbers for a change gutter: added lines, modified (replaced)
 // lines, and one marker per pure-deletion run (the new-file line immediately

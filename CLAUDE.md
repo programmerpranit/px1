@@ -39,7 +39,7 @@ There is no separate lint step; `go vet ./...` and `gofmt` are the baseline. No 
 - `fuzzy.go` — fuzzy file matching for quick-open.
 - `search.go` — workspace text/regex search.
 - `highlight.go` — syntax highlighting via Chroma, windowed in chunks (`hlChunk = 1000`) so opening a huge file costs the same as a small one.
-- `git.go` — git status (staged/unstaged split via porcelain v2 `XY` codes), diff (staged vs. unstaged variants), stage/unstage/commit. Unstaging in a repo with no commits yet falls back to `git rm --cached` (no HEAD to reset against).
+- `git.go` — git status (staged/unstaged split via porcelain v2 `XY` codes), diff (staged vs. unstaged variants), stage/unstage/commit/push, ahead/behind sync status vs. the upstream branch (`gitSyncStatus`). Unstaging in a repo with no commits yet falls back to `git rm --cached` (no HEAD to reset against).
 - `commitmsg.go` — commit-message generation; shells out to the `claude` CLI on staged changes if present on `PATH`, fails quietly otherwise. This is the one intentional runtime-dependency exception to the otherwise-zero-runtime-dependency design.
 - `fileops.go` — file read/save/rename (the narrow write path above).
 - `server.go` — HTTP routes (`/api/*`) and static asset serving; `localPost` CSRF-style guard for mutating endpoints.
@@ -52,7 +52,7 @@ There is no separate lint step; `go vet ./...` and `gofmt` are the baseline. No 
 - `cursor.js` — caret movement, click/double-click selection, occurrence highlighting.
 - `edit.js` — in-place editing (click into an open file and type — no separate edit mode), save (`Mod+S`), the on-disk-conflict banner.
 - `diff.js` — diff view against `HEAD` (`Mod+D`), staged/unstaged.
-- `scm.js` — Source Control panel: staged/unstaged file groups, stage/unstage buttons, commit message box, Generate/Commit actions.
+- `scm.js` — Source Control panel: staged/unstaged file groups, stage/unstage buttons, commit message box, Generate/Commit actions, and a push banner when the branch is ahead of its upstream.
 - `tree.js` — file explorer tree.
 - `search.js` / `find.js` — workspace search panel and in-file find (`Mod+F`).
 - `palette.js` — command palette / quick-open (`Mod+K`, `Mod+P`).

@@ -64,6 +64,8 @@ The **Source Control** tab in the sidebar (next to **Files**) lists every change
 
 Write a commit message and click **Commit**, or click **Generate** to have it written for you: px1 shells out to the `claude` CLI on staged changes and fills the message box with a one-line Conventional Commits summary. Generation needs the `claude` CLI on `PATH`; if it isn't installed, `Generate` reports that plainly and you write the message yourself.
 
+If your branch has a remote tracking branch and ends up ahead of it (right after committing, or any time the panel refreshes), a banner appears above the file list — `↑N vs origin/main` — with a **Push** button.
+
 ## Why a Dedicated Code Viewer?
 
 Traditional IDEs carry tens of thousands of authoring features, Electron runtimes, background indexers, and gigabytes of memory overhead. In modern AI-assisted workflows, developers spend significantly more time reviewing code than typing it.
