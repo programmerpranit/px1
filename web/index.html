@@ -87,10 +87,13 @@
 
     <!-- Virtualized Code Editor Viewport -->
     <div id="editor">
-      <!-- #viewport handles scrolling; #sizer sets full document scroll height; #rows renders only visible DOM rows -->
+      <!-- #viewport handles scrolling; #sizer sets full document scroll height; #rows renders only visible DOM rows.
+           Editable in place once eligible (small_scope) -- click in and type, no separate mode. -->
       <div id="viewport">
         <div id="sizer"><div id="rows"></div><div id="caret" hidden></div></div>
       </div>
+      <!-- Save-conflict banner: shown over the code view when a save collides with a disk change -->
+      <div id="edit-banner" hidden></div>
       <!-- Markdown preview: covers the code view for a Markdown tab (Alt+M toggles) -->
       <div id="mdview" hidden><article id="md" class="md"></article></div>
       <!-- Diff view: covers the code view while a diff layout is active (Mod+D toggles) -->
@@ -220,6 +223,9 @@
     <!-- Selection context menu: the footer's selection actions, at the pointer -->
     <div id="sel-menu" role="menu" hidden></div>
 
+    <!-- File tree right-click menu: Rename -->
+    <div id="tree-menu" role="menu" hidden></div>
+
     <!-- Metrics menu, opened from CPU/RAM status bar -->
     <div id="metrics-menu" role="menu" hidden></div>
 
@@ -239,11 +245,9 @@
         <button class="footer-btn" data-action="goto" title="Go to Line ({Mod+G})"><span class="footer-btn-label">Go to</span><kbd class="footer-kbd" data-keys="Mod+G"></kbd></button>
         <button class="footer-btn" data-action="md-preview" title="Toggle Markdown Preview ({Alt+M})" hidden><span class="footer-btn-label">Preview</span><kbd class="footer-kbd" data-keys="Alt+M"></kbd></button>
         <button class="footer-btn" data-action="wrap" title="Toggle Word Wrap ({Alt+Z})"><span class="footer-btn-label">Wrap</span><kbd class="footer-kbd" data-keys="Alt+Z"></kbd></button>
-        <button class="footer-btn" id="btn-vim-help" data-action="vim-help" title="Vim Keybindings" hidden><span class="footer-btn-label">Vim Keys</span><kbd class="footer-kbd">?</kbd></button>
         <button class="footer-btn" data-action="help" title="Keyboard Shortcuts ({?})"><span class="footer-btn-label">Help</span><kbd class="footer-kbd" data-keys="?"></kbd></button>
       </div>
       <span class="status-sep"></span>
-      <span id="st-vim" class="status-vim-chip" hidden role="button" tabindex="0" title="Vim Mode (Click for shortcuts)">NORMAL</span>
       <span id="st-size"></span>
       <span id="st-pos"></span>
       <span class="grow"></span>
@@ -337,7 +341,6 @@
 
 <!-- SECTION: Keyboard Shortcuts Cheat Sheet Overlay (?) -->
 <div id="helpsheet" hidden></div>
-<div id="vim-helpsheet" hidden></div>
 
 <!-- SECTION: Settings Modal (Cmd+, / Ctrl+,) -->
 <div id="settings-modal" class="modal-overlay" hidden>

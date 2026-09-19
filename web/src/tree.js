@@ -1,6 +1,8 @@
 // web/src/tree.js
-import { $, $$, esc, api } from './state.js';
+import { $, $$, esc, api, S, apiPostJson } from './state.js';
 import { openFile } from './tabs.js';
+import { showToast } from './ui.js';
+import { reloadWorkspace } from './agent.js';
 
 export const treeEl = $('#tree');
 export const openDirs = new Set();
@@ -115,6 +117,84 @@ export async function revealFile(path) {
   }
 }
 
+/* ---------- rename: right-click a row for a one-item menu, or Enter/Esc an
+   inline text field swapped in for the row's name. Move is just a rename to
+   a path in a different directory, typed the same way. ---------- */
+
+const treeMenu = $('#tree-menu');
+let menuTarget = null; // the .tr row the open menu applies to
+
+function closeTreeMenu() {
+  if (treeMenu && !treeMenu.hidden) treeMenu.hidden = true;
+  menuTarget = null;
+}
+
+function openTreeMenu(row, x, y) {
+  if (!treeMenu) return;
+  menuTarget = row;
+  treeMenu.replaceChildren();
+  const btn = document.createElement('button');
+  btn.className = 'sel-menu-item';
+  btn.setAttribute('role', 'menuitem');
+  btn.textContent = 'Rename';
+  btn.addEventListener('click', () => { closeTreeMenu(); startRename(row); });
+  treeMenu.append(btn);
+  treeMenu.hidden = false;
+  const w = treeMenu.offsetWidth, h = treeMenu.offsetHeight;
+  treeMenu.style.left = Math.max(4, x + w > innerWidth - 4 ? x - w : x) + 'px';
+  treeMenu.style.top = Math.max(4, y + h > innerHeight - 4 ? y - h : y) + 'px';
+}
+
+function rowPath(row) {
+  return row.dataset.file ?? row.dataset.dir;
+}
+
+function startRename(row) {
+  const path = rowPath(row);
+  if (!path) return;
+  const nameEl = row.querySelector('.nm');
+  if (!nameEl) return;
+  const oldName = nameEl.textContent;
+  const input = document.createElement('input');
+  input.className = 'tr-rename-input';
+  input.setAttribute('aria-label', 'Rename ' + path);
+  input.value = oldName;
+  nameEl.replaceWith(input);
+  input.focus();
+  input.setSelectionRange(0, input.value.lastIndexOf('.') > 0 ? input.value.lastIndexOf('.') : input.value.length);
+
+  let done = false;
+  const finish = async commit => {
+    if (done) return;
+    done = true;
+    const newName = input.value.trim();
+    if (!commit || !newName || newName === oldName) {
+      input.replaceWith(nameEl);
+      return;
+    }
+    const slash = path.lastIndexOf('/');
+    const newPath = (slash < 0 ? '' : path.slice(0, slash + 1)) + newName;
+    try {
+      await apiPostJson('/api/file/rename', { path, newPath });
+      const t = S.tabs.find(t => t.path === path);
+      if (t) { t.path = newPath; t.name = newName; }
+      showToast('✓', 'Renamed');
+      await reloadWorkspace();
+    } catch (e) {
+      showToast('!', 'Rename failed: ' + e.message);
+      nameEl.textContent = oldName;
+      input.replaceWith(nameEl);
+    }
+  };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', e => e.stopPropagation());
+}
+
 export function initTree() {
   // "Changed only" filter: hide clean files and known-clean folders (CSS-driven).
   $('#btn-changed')?.addEventListener('click', e => {
@@ -146,4 +226,18 @@ export function initTree() {
       openFile(f.dataset.file);
     }
   });
+
+  treeEl.addEventListener('contextmenu', e => {
+    const row = e.target.closest('.tr');
+    if (!row) return;
+    e.preventDefault();
+    openTreeMenu(row, e.clientX, e.clientY);
+  });
+  if (treeMenu) {
+    treeMenu.addEventListener('mousedown', e => e.preventDefault());
+    document.addEventListener('mousedown', e => {
+      if (!treeMenu.hidden && !e.target.closest('#tree-menu')) closeTreeMenu();
+    });
+    addEventListener('keydown', e => { if (e.key === 'Escape') closeTreeMenu(); });
+  }
 }

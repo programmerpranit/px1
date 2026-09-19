@@ -70,6 +70,9 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/outline", s.handleOutline)
 	s.mux.HandleFunc("/api/def", s.handleDef)
 	s.mux.HandleFunc("/api/reindex", s.handleReindex)
+	s.mux.HandleFunc("/api/file/save", s.handleFileSave)
+	s.mux.HandleFunc("/api/file/rename", s.handleFileRename)
+	s.mux.HandleFunc("/api/highlight", s.handleHighlight)
 	s.mux.HandleFunc("/api/lsp/def", s.handleLSPDef)
 	s.mux.HandleFunc("/api/lsp/refs", s.handleLSPRefs)
 	s.mux.HandleFunc("/api/lsp/calls", s.handleLSPCalls)
@@ -561,6 +564,8 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		"markdown":      isMarkdown(rel),
 		"diffAvailable": diffAvail,
 		"lsp":           s.lspBrief(rel),
+		"mtime":         st.ModTime().UnixMilli(),
+		"editable":      st.Size() <= maxEditBytes,
 	})
 }
 
@@ -836,4 +841,3 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, 405, "method not allowed")
 	}
 }
-

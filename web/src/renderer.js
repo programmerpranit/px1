@@ -1,6 +1,7 @@
 // web/src/renderer.js
-import { $, S, doc_, api, LH, CHUNK, OVERSCAN } from './state.js';
+import { $, S, doc_, api, esc, LH, CHUNK, OVERSCAN } from './state.js';
 import { vp, sizer, rowsEl, editor } from './ui.js';
+import { lineText } from './cursor.js';
 
 export function measure() {
   const m = $('#measure');
@@ -75,7 +76,7 @@ export function paint() {
   const agentRanges = (S.agentTargets || []).filter(t => t.path === d.path);
   for (let i = first; i < last; i++) {
     const n = i + 1;
-    const body = d.lines[i];
+    const body = d.buf ? (d.buf.highlighted[i] ?? esc(d.buf.lines[i] ?? '')) : d.lines[i];
     let rc = 'row', gc = 'g';
     if (n === d.cur) rc += ' cur';
     if (agentRanges.some(r => n >= r.l1 && n <= r.l2)) rc += ' agent-sel';
@@ -110,7 +111,10 @@ export function placeCaret() {
   const row = d && rowFor(d.cur);
   if (!row) { el.hidden = true; return null; }
   const code = $('.c', row);
-  const col = Math.max(0, Math.min(d.col || 0, code.textContent.length));
+  // Clamp against the buffer's line length, not the rendered DOM's: a splice
+  // updates d.buf synchronously but render() is rAF-deferred, so right after
+  // an edit the DOM can still be one keystroke behind.
+  const col = Math.max(0, Math.min(d.col || 0, lineText(d, d.cur).length));
   const [node, off] = toPoint({ line: d.cur, col });
   const base = sizer.getBoundingClientRect();
   let x, y;
@@ -287,6 +291,7 @@ export function rowFor(line) {
 }
 
 export function ensureChunks(d, first, last) {
+  if (d.buf) return; // the buffer is fully in memory once an in-place edit has started
   const c0 = Math.floor(first / CHUNK), c1 = Math.floor(Math.max(first, last - 1) / CHUNK);
   for (let c = c0; c <= c1; c++) {
     if (d.chunks.has(c) || d.pending.has(c)) continue;
@@ -313,11 +318,11 @@ export function refineChunk(d, c, delay = 800, tries = 0) {
     d.refining.add(c);
   }
   setTimeout(async () => {
-    if (!S.tabs.includes(d) || tries > 6) { d.refining.delete(c); return; }
+    if (!S.tabs.includes(d) || d.buf || tries > 6) { d.refining.delete(c); return; }
     let j;
     try { j = await api('/api/file', { path: d.path, start: c * CHUNK, count: CHUNK }); }
     catch { d.refining.delete(c); return; }
-    if (!S.tabs.includes(d)) { d.refining.delete(c); return; }
+    if (!S.tabs.includes(d) || d.buf) { d.refining.delete(c); return; }
     if (!j.exact) { refineChunk(d, c, Math.min(delay * 1.6, 5000), tries + 1); return; }
     d.refining.delete(c);
     let changed = false;

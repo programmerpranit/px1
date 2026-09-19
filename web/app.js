@@ -60,7 +60,7 @@
     for (const el of $$('[title*="{"]', root))
       el.title = withKeys(el.title);
   }
-  var LH2 = 20;
+  var LH = 20;
   var CHUNK = 1000;
   var OVERSCAN = 24;
   var S2 = {
@@ -143,373 +143,6 @@
     }
   }
 
-  // web/src/renderer.js
-  function measure() {
-    const m = $("#measure");
-    m.textContent = "x".repeat(100);
-    S2.chW = m.getBoundingClientRect().width / 100 || 7.8;
-  }
-  function layout() {
-    const d = doc_();
-    if (!d)
-      return;
-    const digits = String(d.total).length;
-    editor.style.setProperty("--gw", digits);
-    const gutter = digits * S2.chW + 30;
-    const w = S2.wrap ? vp.clientWidth : Math.max(vp.clientWidth, gutter + (d.maxCols + 4) * S2.chW);
-    sizer.style.height = d.total * LH2 + Math.max(120, vp.clientHeight * 0.5) + "px";
-    sizer.style.width = w + "px";
-    rowsEl.style.width = w + "px";
-  }
-  function toggleWordWrap(forced) {
-    S2.wrap = typeof forced === "boolean" ? forced : !S2.wrap;
-    document.body.classList.toggle("word-wrap", S2.wrap);
-    try {
-      localStorage.setItem("px0.wrap", S2.wrap ? "true" : "false");
-    } catch {}
-    updateEditorOptionControls();
-    layout();
-    render();
-  }
-  function toggleLineNumbers(forced) {
-    S2.lineNumbers = typeof forced === "boolean" ? forced : !S2.lineNumbers;
-    document.body.classList.toggle("hide-lines", !S2.lineNumbers);
-    layout();
-    render();
-  }
-  function applyEditorTypography(fontSize, fontFamily, lineHeight, tabSize) {
-    if (fontSize)
-      document.documentElement.style.setProperty("--fs", fontSize + "px");
-    if (fontFamily)
-      document.documentElement.style.setProperty("--mono", fontFamily);
-    if (lineHeight) {
-      document.documentElement.style.setProperty("--lh", lineHeight + "px");
-    } else if (fontSize) {
-      document.documentElement.style.setProperty("--lh", Math.round(fontSize * 1.5) + "px");
-    }
-    if (tabSize)
-      document.documentElement.style.setProperty("--tab-size", tabSize);
-    measure();
-    layout();
-    render();
-  }
-  function updateEditorOptionControls() {
-    const wrapBtn = $('[data-action="wrap"]');
-    if (wrapBtn)
-      wrapBtn.classList.toggle("active", !!S2.wrap);
-  }
-  var raf = 0;
-  function render() {
-    if (raf)
-      return;
-    raf = requestAnimationFrame(() => {
-      raf = 0;
-      paint();
-    });
-  }
-  function paint() {
-    const d = doc_();
-    if (!d) {
-      const c = $("#caret");
-      if (c)
-        c.hidden = true;
-      return;
-    }
-    const top = vp.scrollTop;
-    const first = Math.max(0, Math.floor(top / LH2) - OVERSCAN);
-    const count = Math.ceil(vp.clientHeight / LH2) + OVERSCAN * 2;
-    const last = Math.min(d.total, first + count);
-    ensureChunks(d, first, last);
-    let html = "";
-    const gut = d.gutter || null;
-    const agentRanges = (S2.agentTargets || []).filter((t) => t.path === d.path);
-    for (let i = first;i < last; i++) {
-      const n = i + 1;
-      const body = d.lines[i];
-      let rc = "row", gc = "g";
-      if (n === d.cur)
-        rc += " cur";
-      if (agentRanges.some((r) => n >= r.l1 && n <= r.l2))
-        rc += " agent-sel";
-      if (agentRanges.some((r) => n === r.l1))
-        rc += " agent-anchor";
-      if (gut) {
-        const m = gut.marks.get(n);
-        if (m)
-          gc += m === "add" ? " gut-add" : " gut-mod";
-        if (gut.dels.has(n))
-          rc += " gut-del";
-      }
-      html += '<div class="' + rc + '" data-l="' + n + '">' + '<div class="' + gc + '">' + n + '</div><div class="c">' + (body === undefined ? "" : body) + "</div></div>";
-    }
-    const sel = saveSelection();
-    rowsEl.style.transform = "translateY(" + first * LH2 + "px)";
-    rowsEl.innerHTML = html;
-    rowsEl.classList.toggle("all", S2.selAll === d);
-    decorate(first, last);
-    if (sel)
-      restoreSelection(sel);
-    placeCaret();
-  }
-  var caretKey = "";
-  function placeCaret() {
-    const el = $("#caret");
-    if (!el)
-      return null;
-    const d = doc_();
-    const row = d && rowFor(d.cur);
-    if (!row) {
-      el.hidden = true;
-      return null;
-    }
-    const code = $(".c", row);
-    const col = Math.max(0, Math.min(d.col || 0, code.textContent.length));
-    const [node, off] = toPoint({ line: d.cur, col });
-    const base = sizer.getBoundingClientRect();
-    let x, y;
-    if (node.nodeType === 3) {
-      const r = document.createRange();
-      r.setStart(node, off);
-      r.collapse(true);
-      const rect = r.getClientRects()[0] || r.getBoundingClientRect();
-      x = rect.left;
-      y = S2.wrap ? rect.top - (LH2 - rect.height) / 2 : row.getBoundingClientRect().top;
-    } else {
-      const cr = code.getBoundingClientRect();
-      x = cr.left + parseFloat(getComputedStyle(code).paddingLeft || "0");
-      y = cr.top;
-    }
-    const g = $(".g", row);
-    if (g && x < g.getBoundingClientRect().right - 1) {
-      el.hidden = true;
-      return null;
-    }
-    el.style.transform = "translate(" + (x - base.left) + "px," + (y - base.top) + "px)";
-    el.hidden = false;
-    const key = d.path + ":" + d.cur + ":" + col;
-    if (key !== caretKey) {
-      caretKey = key;
-      el.classList.remove("blink");
-      el.offsetWidth;
-      el.classList.add("blink");
-    }
-    return x - base.left;
-  }
-  function saveSelection() {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount)
-      return null;
-    if (!rowsEl.contains(sel.getRangeAt(0).commonAncestorContainer))
-      return null;
-    const a = toPos(sel.anchorNode, sel.anchorOffset);
-    const f = toPos(sel.focusNode, sel.focusOffset);
-    return a && f ? { a, f } : null;
-  }
-  function restoreSelection({ a, f }) {
-    const pa = toPoint(a), pf = toPoint(f);
-    if (pa && pf)
-      window.getSelection().setBaseAndExtent(pa[0], pa[1], pf[0], pf[1]);
-  }
-  function toPos(node, off) {
-    if (node === rowsEl) {
-      const row2 = rowsEl.children[off] || rowsEl.lastElementChild;
-      if (!row2)
-        return null;
-      const atEnd = !rowsEl.children[off];
-      return { line: +row2.dataset.l, col: atEnd ? $(".c", row2).textContent.length : 0 };
-    }
-    const el = node.nodeType === 1 ? node : node.parentElement;
-    const row = el && el.closest(".row");
-    if (!row || !rowsEl.contains(row))
-      return null;
-    const code = $(".c", row);
-    const r = document.createRange();
-    r.selectNodeContents(code);
-    const cmp = r.comparePoint(node, off);
-    if (cmp < 0)
-      return { line: +row.dataset.l, col: 0 };
-    if (cmp > 0)
-      return { line: +row.dataset.l, col: code.textContent.length };
-    r.setEnd(node, off);
-    return { line: +row.dataset.l, col: r.toString().length };
-  }
-  function toPoint({ line, col }) {
-    const row = rowFor(line);
-    if (!row)
-      return null;
-    const code = $(".c", row);
-    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
-    let at = 0;
-    for (let n = walker.nextNode();n; n = walker.nextNode()) {
-      const len = n.nodeValue.length;
-      if (col <= at + len)
-        return [n, col - at];
-      at += len;
-    }
-    return [code, code.childNodes.length];
-  }
-  function decorate(first, last) {
-    const d = doc_();
-    if (S2.occ) {
-      for (const row of rowsEl.children)
-        markNodes($(".c", row), S2.occ, true, "occ");
-    }
-    if (S2.link) {
-      const row = rowFor(S2.link.line);
-      if (row)
-        wrapRange($(".c", row), S2.link.col, S2.link.col + S2.link.word.length, "link");
-    }
-    if (S2.find && S2.find.hits.length) {
-      const byLine = S2.find.byLine;
-      const act = S2.find.hits[S2.find.active];
-      for (const row of rowsEl.children) {
-        const n = +row.dataset.l;
-        if (!byLine.has(n))
-          continue;
-        const marks = markNodes($(".c", row), S2.find.q, S2.find.ci, "mark");
-        if (act && act.line === n && marks[act.n])
-          marks[act.n].classList.add("on");
-      }
-    }
-  }
-  function markNodes(el, needle, caseSensitive, cls) {
-    if (!el || !needle)
-      return [];
-    const out = [];
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    const texts = [];
-    for (let n = walker.nextNode();n; n = walker.nextNode())
-      texts.push(n);
-    for (const node of texts) {
-      const raw = node.nodeValue;
-      const hay = caseSensitive ? raw : raw.toLowerCase();
-      const nd = caseSensitive ? needle : needle.toLowerCase();
-      let i = hay.indexOf(nd), at = 0;
-      if (i < 0)
-        continue;
-      const frag = document.createDocumentFragment();
-      while (i >= 0) {
-        if (i > at)
-          frag.appendChild(document.createTextNode(raw.slice(at, i)));
-        const mk = document.createElement(cls === "mark" ? "mark" : "span");
-        if (cls !== "mark")
-          mk.className = cls;
-        mk.textContent = raw.slice(i, i + nd.length);
-        frag.appendChild(mk);
-        out.push(mk);
-        at = i + nd.length;
-        i = hay.indexOf(nd, at);
-      }
-      if (at < raw.length)
-        frag.appendChild(document.createTextNode(raw.slice(at)));
-      node.parentNode.replaceChild(frag, node);
-    }
-    return out;
-  }
-  function wrapRange(el, from, to, cls) {
-    if (!el || to <= from)
-      return null;
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    const nodes = [];
-    for (let n = walker.nextNode();n; n = walker.nextNode())
-      nodes.push(n);
-    let at = 0, out = null;
-    for (const node of nodes) {
-      const len = node.nodeValue.length;
-      const s = Math.max(from, at), e = Math.min(to, at + len);
-      if (s < e) {
-        const a = s - at, b = e - at;
-        const span = document.createElement("span");
-        span.className = cls;
-        span.textContent = node.nodeValue.slice(a, b);
-        const frag = document.createDocumentFragment();
-        if (a > 0)
-          frag.appendChild(document.createTextNode(node.nodeValue.slice(0, a)));
-        frag.appendChild(span);
-        if (b < len)
-          frag.appendChild(document.createTextNode(node.nodeValue.slice(b)));
-        node.parentNode.replaceChild(frag, node);
-        out = out || span;
-      }
-      at += len;
-      if (at >= to)
-        break;
-    }
-    return out;
-  }
-  function rowFor(line) {
-    for (const r of rowsEl.children)
-      if (+r.dataset.l === line)
-        return r;
-    return null;
-  }
-  function ensureChunks(d, first, last) {
-    const c0 = Math.floor(first / CHUNK), c1 = Math.floor(Math.max(first, last - 1) / CHUNK);
-    for (let c = c0;c <= c1; c++) {
-      if (d.chunks.has(c) || d.pending.has(c))
-        continue;
-      d.pending.add(c);
-      const gen = d.gen;
-      api("/api/file", { path: d.path, start: c * CHUNK, count: CHUNK }).then((j) => {
-        if (gen !== d.gen)
-          return;
-        for (let i = 0;i < j.lines.length; i++)
-          d.lines[j.start + i] = j.lines[i];
-        d.chunks.add(c);
-        d.pending.delete(c);
-        if (doc_() === d)
-          render();
-        if (j.refine)
-          refineChunk(d, c);
-      }).catch(() => d.pending.delete(c));
-    }
-  }
-  function refineChunk(d, c, delay = 800, tries = 0) {
-    if (tries === 0) {
-      if (d.refining.has(c))
-        return;
-      d.refining.add(c);
-    }
-    setTimeout(async () => {
-      if (!S2.tabs.includes(d) || tries > 6) {
-        d.refining.delete(c);
-        return;
-      }
-      let j;
-      try {
-        j = await api("/api/file", { path: d.path, start: c * CHUNK, count: CHUNK });
-      } catch {
-        d.refining.delete(c);
-        return;
-      }
-      if (!S2.tabs.includes(d)) {
-        d.refining.delete(c);
-        return;
-      }
-      if (!j.exact) {
-        refineChunk(d, c, Math.min(delay * 1.6, 5000), tries + 1);
-        return;
-      }
-      d.refining.delete(c);
-      let changed = false;
-      for (let i = 0;i < j.lines.length; i++) {
-        if (d.lines[j.start + i] !== j.lines[i]) {
-          d.lines[j.start + i] = j.lines[i];
-          changed = true;
-        }
-      }
-      if (changed && doc_() === d)
-        render();
-    }, delay);
-  }
-  function initRenderer() {
-    vp.addEventListener("scroll", render, { passive: true });
-    new ResizeObserver(() => {
-      layout();
-      render();
-    }).observe(editor);
-  }
-
   // web/src/history.js
   function pushHistory(path, line) {
     const top = S2.hist[S2.histIdx];
@@ -528,6 +161,115 @@
     S2.histIdx = i;
     const h = S2.hist[i];
     openFile(h.path, { line: h.line, push: false });
+  }
+
+  // web/src/search.js
+  var resultsEl = $("#results");
+  var lastResults = null;
+  var searchAbort = null;
+  function cancelSearch() {
+    if (searchAbort) {
+      searchAbort.abort();
+      searchAbort = null;
+    }
+  }
+  var runSearch = debounce(async () => {
+    const qEl = $("#q");
+    if (!qEl || !resultsEl)
+      return;
+    const q = qEl.value;
+    if (!q.trim()) {
+      cancelSearch();
+      resultsEl.innerHTML = "";
+      return;
+    }
+    cancelSearch();
+    const controller = new AbortController;
+    searchAbort = controller;
+    resultsEl.innerHTML = '<div class="hint">searching…</div>';
+    const params = {
+      q,
+      glob: $("#glob")?.value || "",
+      case: $("#o-case")?.classList.contains("on") ? 1 : "",
+      word: $("#o-word")?.classList.contains("on") ? 1 : "",
+      re: $("#o-re")?.classList.contains("on") ? 1 : ""
+    };
+    try {
+      const j = await api("/api/search", params, { signal: controller.signal });
+      if (searchAbort === controller) {
+        searchAbort = null;
+        renderResults(j);
+      }
+    } catch (e) {
+      if (e.name === "AbortError")
+        return;
+      if (searchAbort === controller) {
+        searchAbort = null;
+        resultsEl.innerHTML = '<div class="hint">' + esc2(e.message) + "</div>";
+      }
+    }
+  }, 160);
+  function renderResults(j) {
+    lastResults = j;
+    if (!resultsEl)
+      return;
+    if (!j.results || !j.results.length) {
+      resultsEl.innerHTML = '<div class="hint">No results.</div>';
+      return;
+    }
+    const head = j.header || j.total.toLocaleString() + " result" + (j.total === 1 ? "" : "s") + " in " + j.files.toLocaleString() + " file" + (j.files === 1 ? "" : "s") + (j.truncated ? " (truncated)" : "");
+    let html = '<div class="hint">' + esc2(head) + "</div>";
+    for (const f of j.results) {
+      html += '<div class="rfile" data-toggle="' + esc2(f.path) + '" title="' + esc2(f.path) + '">' + '<span class="ar">&#9660;</span>' + (f.ext ? '<span class="ext">ext</span>' : "") + '<span class="fp">' + esc2(displayPath(f.path)) + "</span>" + '<span class="cnt">' + f.matches.length + "</span></div>" + '<div data-group="' + esc2(f.path) + '">';
+      for (const m of f.matches) {
+        html += '<div class="rline" data-p="' + esc2(f.path) + '" data-n="' + m.line + '" title="Jump to ' + esc2(f.path) + ":" + m.line + '">' + '<span class="rn">' + m.line + '</span><span class="rt">' + esc2(m.pre) + "<mark>" + esc2(m.mid) + "</mark>" + esc2(m.post) + "</span></div>";
+      }
+      html += "</div>";
+    }
+    resultsEl.innerHTML = html;
+  }
+  function displayPath(p) {
+    if (p.length <= 48)
+      return p;
+    const parts = p.split("/");
+    return "…/" + parts.slice(-3).join("/");
+  }
+  function initSearch() {
+    if (!resultsEl)
+      return;
+    resultsEl.addEventListener("click", (e) => {
+      const t = e.target.closest("[data-toggle]");
+      if (t) {
+        const g = resultsEl.querySelector('[data-group="' + CSS.escape(t.dataset.toggle) + '"]');
+        const hidden = g.style.display === "none";
+        g.style.display = hidden ? "" : "none";
+        $(".ar", t).innerHTML = hidden ? "&#9660;" : "&#9654;";
+        return;
+      }
+      const r = e.target.closest(".rline");
+      if (r) {
+        $$(".rline.sel", resultsEl).forEach((x) => x.classList.remove("sel"));
+        r.classList.add("sel");
+        openFile(r.dataset.p, { line: +r.dataset.n });
+        const q = $("#q").value;
+        if (q)
+          flashFind(q);
+      }
+    });
+    $("#q").addEventListener("input", runSearch);
+    $("#glob").addEventListener("input", runSearch);
+    $$(".opt").forEach((b) => b.addEventListener("click", () => {
+      b.classList.toggle("on");
+      runSearch();
+    }));
+    $("#q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const f = $(".rline", resultsEl);
+        if (f)
+          f.click();
+      }
+    });
   }
 
   // web/src/outline.js
@@ -649,498 +391,6 @@
       pushHistory(d.path, d.cur);
     });
     $("#outline-filter")?.addEventListener("input", drawOutline);
-  }
-
-  // web/src/tree.js
-  var treeEl = $("#tree");
-  var openDirs = new Set;
-  var GIT_STATUS = {
-    M: ["git-M", "modified"],
-    A: ["git-A", "added"],
-    D: ["git-D", "deleted"],
-    U: ["git-untracked", "untracked"],
-    R: ["git-R", "renamed"],
-    C: ["git-A", "copied"],
-    "!": ["git-M", "unmerged"]
-  };
-  async function drawTree(dir, container, depth) {
-    let j;
-    try {
-      j = await api("/api/tree", { dir });
-    } catch {
-      return;
-    }
-    container.innerHTML = j.children.map((c) => {
-      const pad = 8 + depth * 12;
-      const ig = c.ignored ? " ignored" : "";
-      const note = c.ignored ? " (ignored by .gitignore, not searched)" : "";
-      if (c.dir) {
-        const dc = c.dirty ? " dirty" : "";
-        return '<div class="tw"><div class="tr dir' + ig + dc + '" data-dir="' + esc2(c.path) + '" style="padding-left:' + pad + 'px" title="Folder: ' + esc2(c.path) + note + '">' + '<span class="ar"></span><span class="nm">' + esc2(c.name) + "</span></div>" + '<div class="kids" data-kids="' + esc2(c.path) + '"></div></div>';
-      }
-      const g = GIT_STATUS[c.status];
-      const gc = g ? " dirty " + g[0] : "";
-      const badge = g ? '<span class="gs" title="git: ' + g[1] + '">' + esc2(c.status) + "</span>" : "";
-      return '<div class="tr file' + ig + gc + '" data-file="' + esc2(c.path) + '" style="padding-left:' + (pad + 12) + 'px" title="Open ' + esc2(c.path) + note + '">' + '<span class="ic" data-t="' + fileKind(c.name) + '"></span><span class="nm">' + esc2(c.name) + "</span>" + badge + "</div>";
-    }).join("");
-  }
-  var FILE_KIND = {
-    go: "code",
-    js: "code",
-    mjs: "code",
-    cjs: "code",
-    ts: "code",
-    tsx: "code",
-    jsx: "code",
-    py: "code",
-    rb: "code",
-    rs: "code",
-    java: "code",
-    kt: "code",
-    c: "code",
-    h: "code",
-    cc: "code",
-    cpp: "code",
-    hpp: "code",
-    cs: "code",
-    php: "code",
-    swift: "code",
-    lua: "code",
-    ex: "code",
-    exs: "code",
-    scala: "code",
-    dart: "code",
-    sh: "code",
-    bash: "code",
-    zsh: "code",
-    sql: "code",
-    json: "data",
-    yaml: "data",
-    yml: "data",
-    toml: "data",
-    ini: "data",
-    xml: "data",
-    csv: "data",
-    env: "data",
-    lock: "data",
-    mod: "data",
-    sum: "data",
-    md: "doc",
-    markdown: "doc",
-    txt: "doc",
-    rst: "doc",
-    adoc: "doc",
-    html: "web",
-    htm: "web",
-    css: "web",
-    scss: "web",
-    less: "web",
-    svg: "web",
-    vue: "web",
-    png: "img",
-    jpg: "img",
-    jpeg: "img",
-    gif: "img",
-    webp: "img",
-    ico: "img",
-    avif: "img"
-  };
-  function fileKind(name) {
-    const i = name.lastIndexOf(".");
-    return i > 0 && FILE_KIND[name.slice(i + 1).toLowerCase()] || "other";
-  }
-  async function refreshTree() {
-    await drawTree("", treeEl, 0);
-    const dirs = Array.from(openDirs).sort((a, b) => a.split("/").length - b.split("/").length);
-    for (const path of dirs) {
-      const dirRow = treeEl.querySelector('[data-dir="' + CSS.escape(path) + '"]');
-      const kids = treeEl.querySelector('[data-kids="' + CSS.escape(path) + '"]');
-      if (kids && dirRow) {
-        dirRow.classList.add("open");
-        kids.classList.add("open");
-        kids.dataset.loaded = "1";
-        await drawTree(path, kids, path.split("/").length);
-      } else {
-        openDirs.delete(path);
-      }
-    }
-  }
-  function restoreOpenDirs(dirs) {
-    if (Array.isArray(dirs)) {
-      for (const d of dirs) {
-        if (typeof d === "string")
-          openDirs.add(d);
-      }
-    }
-  }
-  async function revealDir(dir) {
-    const parts = dir.split("/");
-    for (let i = 0;i < parts.length; i++) {
-      const p = parts.slice(0, i + 1).join("/");
-      const row = treeEl.querySelector('[data-dir="' + CSS.escape(p) + '"]');
-      if (!row)
-        break;
-      if (!row.classList.contains("open")) {
-        row.classList.add("open");
-        const kids = treeEl.querySelector('[data-kids="' + CSS.escape(p) + '"]');
-        if (kids) {
-          kids.classList.add("open");
-          openDirs.add(p);
-          kids.dataset.loaded = "1";
-          await drawTree(p, kids, p.split("/").length);
-        }
-      }
-    }
-    const last = treeEl.querySelector('[data-dir="' + CSS.escape(dir) + '"]');
-    if (last)
-      last.scrollIntoView({ block: "center" });
-    try {
-      sessionStorage.setItem("px0.openDirs", JSON.stringify(Array.from(openDirs)));
-    } catch {}
-  }
-  async function revealFile(path) {
-    const idx = path.lastIndexOf("/");
-    if (idx > 0)
-      await revealDir(path.slice(0, idx));
-    const row = treeEl.querySelector('[data-file="' + CSS.escape(path) + '"]');
-    if (row) {
-      $$(".tr.sel", treeEl).forEach((x) => x.classList.remove("sel"));
-      row.classList.add("sel");
-      row.scrollIntoView({ block: "center" });
-    }
-  }
-  function initTree() {
-    $("#btn-changed")?.addEventListener("click", (e) => {
-      const on = treeEl.classList.toggle("changed-only");
-      e.currentTarget.classList.toggle("active", on);
-    });
-    treeEl.addEventListener("click", async (e) => {
-      const dirRow = e.target.closest("[data-dir]");
-      if (dirRow) {
-        const path = dirRow.dataset.dir;
-        const kids = treeEl.querySelector('[data-kids="' + CSS.escape(path) + '"]');
-        const open = dirRow.classList.toggle("open");
-        kids.classList.toggle("open", open);
-        if (open) {
-          openDirs.add(path);
-          kids.dataset.loaded = "1";
-          await drawTree(path, kids, path.split("/").length);
-        } else
-          openDirs.delete(path);
-        try {
-          sessionStorage.setItem("px0.openDirs", JSON.stringify(Array.from(openDirs)));
-        } catch {}
-        return;
-      }
-      const f = e.target.closest("[data-file]");
-      if (f) {
-        $$(".tr.sel", treeEl).forEach((x) => x.classList.remove("sel"));
-        f.classList.add("sel");
-        openFile(f.dataset.file);
-      }
-    });
-  }
-
-  // web/src/panels.js
-  function showPanel(name) {
-    document.body.classList.remove("side-hidden");
-    layout();
-    render();
-  }
-  async function reindexWorkspace() {
-    try {
-      const j = await api("/api/reindex");
-      S2.meta.files = j.files;
-      S2.meta.indexMs = j.indexMs;
-      await refreshTree();
-      await reloadOpenTabs();
-      updateStatus();
-      showToast("✓", "Workspace refreshed");
-    } catch (e) {
-      showToast("!", "Refresh failed: " + e.message);
-    }
-  }
-  function initPanels() {
-    $("#btn-reindex").addEventListener("click", reindexWorkspace);
-    (() => {
-      const rz = $("#resizer");
-      let dragging = false;
-      rz.addEventListener("mousedown", (e) => {
-        dragging = true;
-        rz.classList.add("drag");
-        e.preventDefault();
-      });
-      addEventListener("mousemove", (e) => {
-        if (!dragging)
-          return;
-        $("#side").style.width = Math.max(170, Math.min(620, e.clientX)) + "px";
-      });
-      addEventListener("mouseup", () => {
-        if (dragging) {
-          dragging = false;
-          rz.classList.remove("drag");
-          layout();
-          render();
-        }
-      });
-    })();
-  }
-
-  // web/src/find.js
-  var findbar = $("#findbar");
-  var findInput = $("#find-input");
-  function editorSelection() {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount)
-      return "";
-    const at = sel.getRangeAt(0).commonAncestorContainer;
-    if (!vp.contains(at) && !mdview.contains(at))
-      return "";
-    const line = sel.toString().split(/\r?\n/).find((l) => l.trim());
-    return line ? line.trim() : "";
-  }
-  function openFind(seed) {
-    if (!doc_())
-      return;
-    const sel = editorSelection();
-    if (sel)
-      findInput.value = sel;
-    else if (findbar.hidden && seed)
-      findInput.value = seed;
-    findbar.hidden = false;
-    findInput.focus();
-    findInput.select();
-    if (findInput.value)
-      runFind();
-  }
-  function clearFind() {
-    findbar.hidden = true;
-    S2.find = null;
-    $("#find-count").textContent = "0";
-    $("#minimap-hits").innerHTML = "";
-    clearPreviewMarks();
-    paint();
-  }
-  var runFind = debounce(async () => {
-    const d = doc_();
-    if (!d)
-      return;
-    const q = findInput.value;
-    if (previewing(d)) {
-      const n = findInPreview(q);
-      S2.find = q ? { q, ci: false, hits: new Array(n).fill(null), byLine: new Set, active: n ? 0 : -1, preview: true } : null;
-      $("#find-count").textContent = !q ? "0" : n ? "1 / " + n : "no results";
-      $("#minimap-hits").innerHTML = previewHitOffsets().map((p) => '<i style="top:' + p + '%"></i>').join("");
-      if (n)
-        jumpToHit(0);
-      return;
-    }
-    if (!q) {
-      S2.find = null;
-      $("#find-count").textContent = "0";
-      $("#minimap-hits").innerHTML = "";
-      paint();
-      return;
-    }
-    let j;
-    try {
-      j = await api("/api/search", { q, glob: d.path });
-    } catch {
-      return;
-    }
-    const f = (j.results || []).find((r) => r.path === d.path);
-    const hits = [];
-    if (f) {
-      let prevLine = -1, n = 0;
-      for (const m of f.matches) {
-        n = m.line === prevLine ? n + 1 : 0;
-        prevLine = m.line;
-        hits.push({ line: m.line, n });
-      }
-    }
-    S2.find = { q, ci: false, hits, byLine: new Set(hits.map((h) => h.line)), active: hits.length ? 0 : -1 };
-    $("#find-count").textContent = hits.length ? "1 / " + hits.length : "no results";
-    drawMinimap(hits, d.total);
-    if (hits.length)
-      jumpToHit(0);
-    else
-      paint();
-  }, 140);
-  function drawMinimap(hits, total) {
-    const mm = $("#minimap-hits");
-    if (!hits.length) {
-      mm.innerHTML = "";
-      return;
-    }
-    const seen = new Set;
-    mm.innerHTML = hits.filter((h) => !seen.has(h.line) && seen.add(h.line)).map((h) => '<i style="top:' + ((h.line - 1) / total * 100).toFixed(3) + '%"></i>').join("");
-  }
-  function jumpToHit(i) {
-    const d = doc_();
-    if (!d || !S2.find || !S2.find.hits.length)
-      return;
-    const n = S2.find.hits.length;
-    S2.find.active = (i % n + n) % n;
-    if (S2.find.preview) {
-      $("#find-count").textContent = S2.find.active + 1 + " / " + n;
-      showPreviewHit(S2.find.active);
-      return;
-    }
-    const h = S2.find.hits[S2.find.active];
-    d.cur = h.line;
-    const y = (h.line - 1) * LH2;
-    if (y < vp.scrollTop + LH2 * 2 || y > vp.scrollTop + vp.clientHeight - LH2 * 3)
-      centerLine(h.line);
-    $("#find-count").textContent = S2.find.active + 1 + " / " + n;
-    render();
-    updateStatus();
-  }
-  function findNextMatch(delta = 1) {
-    if (!S2.find || !S2.find.hits || !S2.find.hits.length) {
-      if (findInput.value) {
-        runFind();
-        return;
-      }
-      return;
-    }
-    jumpToHit(S2.find.active + delta);
-  }
-  function initFind() {
-    findInput.addEventListener("input", runFind);
-    findInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        jumpToHit(S2.find ? S2.find.active + (e.shiftKey ? -1 : 1) : 0);
-      }
-      if (e.key === "Escape") {
-        clearFind();
-        vp.focus();
-      }
-    });
-    $("#find-next").addEventListener("click", () => jumpToHit(S2.find ? S2.find.active + 1 : 0));
-    $("#find-prev").addEventListener("click", () => jumpToHit(S2.find ? S2.find.active - 1 : 0));
-    $("#find-close").addEventListener("click", clearFind);
-    $("#minimap-hits").addEventListener("click", (e) => {
-      const r = $("#minimap-hits").getBoundingClientRect();
-      const d = doc_();
-      if (!d)
-        return;
-      if (previewing(d)) {
-        scrollPreviewTo((e.clientY - r.top) / r.height);
-        return;
-      }
-      centerLine(Math.round((e.clientY - r.top) / r.height * d.total));
-      render();
-    });
-  }
-
-  // web/src/search.js
-  var resultsEl = $("#results");
-  var lastResults = null;
-  var searchAbort = null;
-  function cancelSearch() {
-    if (searchAbort) {
-      searchAbort.abort();
-      searchAbort = null;
-    }
-  }
-  var runSearch = debounce(async () => {
-    const qEl = $("#q");
-    if (!qEl || !resultsEl)
-      return;
-    const q = qEl.value;
-    if (!q.trim()) {
-      cancelSearch();
-      resultsEl.innerHTML = "";
-      return;
-    }
-    cancelSearch();
-    const controller = new AbortController;
-    searchAbort = controller;
-    resultsEl.innerHTML = '<div class="hint">searching…</div>';
-    const params = {
-      q,
-      glob: $("#glob")?.value || "",
-      case: $("#o-case")?.classList.contains("on") ? 1 : "",
-      word: $("#o-word")?.classList.contains("on") ? 1 : "",
-      re: $("#o-re")?.classList.contains("on") ? 1 : ""
-    };
-    try {
-      const j = await api("/api/search", params, { signal: controller.signal });
-      if (searchAbort === controller) {
-        searchAbort = null;
-        renderResults(j);
-      }
-    } catch (e) {
-      if (e.name === "AbortError")
-        return;
-      if (searchAbort === controller) {
-        searchAbort = null;
-        resultsEl.innerHTML = '<div class="hint">' + esc2(e.message) + "</div>";
-      }
-    }
-  }, 160);
-  function renderResults(j) {
-    lastResults = j;
-    if (!resultsEl)
-      return;
-    if (!j.results || !j.results.length) {
-      resultsEl.innerHTML = '<div class="hint">No results.</div>';
-      return;
-    }
-    const head = j.header || j.total.toLocaleString() + " result" + (j.total === 1 ? "" : "s") + " in " + j.files.toLocaleString() + " file" + (j.files === 1 ? "" : "s") + (j.truncated ? " (truncated)" : "");
-    let html = '<div class="hint">' + esc2(head) + "</div>";
-    for (const f of j.results) {
-      html += '<div class="rfile" data-toggle="' + esc2(f.path) + '" title="' + esc2(f.path) + '">' + '<span class="ar">&#9660;</span>' + (f.ext ? '<span class="ext">ext</span>' : "") + '<span class="fp">' + esc2(displayPath(f.path)) + "</span>" + '<span class="cnt">' + f.matches.length + "</span></div>" + '<div data-group="' + esc2(f.path) + '">';
-      for (const m of f.matches) {
-        html += '<div class="rline" data-p="' + esc2(f.path) + '" data-n="' + m.line + '" title="Jump to ' + esc2(f.path) + ":" + m.line + '">' + '<span class="rn">' + m.line + '</span><span class="rt">' + esc2(m.pre) + "<mark>" + esc2(m.mid) + "</mark>" + esc2(m.post) + "</span></div>";
-      }
-      html += "</div>";
-    }
-    resultsEl.innerHTML = html;
-  }
-  function displayPath(p) {
-    if (p.length <= 48)
-      return p;
-    const parts = p.split("/");
-    return "…/" + parts.slice(-3).join("/");
-  }
-  function initSearch() {
-    if (!resultsEl)
-      return;
-    resultsEl.addEventListener("click", (e) => {
-      const t = e.target.closest("[data-toggle]");
-      if (t) {
-        const g = resultsEl.querySelector('[data-group="' + CSS.escape(t.dataset.toggle) + '"]');
-        const hidden = g.style.display === "none";
-        g.style.display = hidden ? "" : "none";
-        $(".ar", t).innerHTML = hidden ? "&#9660;" : "&#9654;";
-        return;
-      }
-      const r = e.target.closest(".rline");
-      if (r) {
-        $$(".rline.sel", resultsEl).forEach((x) => x.classList.remove("sel"));
-        r.classList.add("sel");
-        openFile(r.dataset.p, { line: +r.dataset.n });
-        const q = $("#q").value;
-        if (q)
-          flashFind(q);
-      }
-    });
-    $("#q").addEventListener("input", runSearch);
-    $("#glob").addEventListener("input", runSearch);
-    $$(".opt").forEach((b) => b.addEventListener("click", () => {
-      b.classList.toggle("on");
-      runSearch();
-    }));
-    $("#q").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        const f = $(".rline", resultsEl);
-        if (f)
-          f.click();
-      }
-    });
   }
 
   // web/src/inspector.js
@@ -1449,290 +699,1758 @@
     setTimeout(paint, 0);
   }
 
-  // web/src/cursor.js
-  var WORD = /[A-Za-z0-9_$]/;
-  function wordAtPoint(x, y) {
-    let node, off;
-    if (document.caretPositionFromPoint) {
-      const p = document.caretPositionFromPoint(x, y);
-      if (!p)
-        return null;
-      node = p.offsetNode;
-      off = p.offset;
-    } else if (document.caretRangeFromPoint) {
-      const r = document.caretRangeFromPoint(x, y);
-      if (!r)
-        return null;
-      node = r.startContainer;
-      off = r.startOffset;
-    } else
-      return null;
-    if (!node || node.nodeType !== 3)
-      return null;
-    const code = node.parentElement && node.parentElement.closest(".c");
-    const row = code && code.closest(".row");
-    if (!code || !row)
-      return null;
-    let col = 0;
-    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode();n; n = walker.nextNode()) {
-      if (n === node) {
-        col += off;
-        break;
-      }
-      col += n.nodeValue.length;
-    }
-    const full = code.textContent;
-    let a = Math.min(col, full.length), b = a;
-    while (a > 0 && WORD.test(full[a - 1]))
-      a--;
-    while (b < full.length && WORD.test(full[b]))
-      b++;
-    if (a === b)
-      return null;
-    const d = doc_();
-    return { word: full.slice(a, b), line: +row.dataset.l, col: a, path: d && d.path };
+  // web/src/selbar.js
+  var status = $("#status");
+  var statsEl = $("#sel-stats");
+  var diffviewEl = $("#diffview");
+  var SEL_KEYS = { KeyC: "copy-ref", KeyA: "copy-agent", KeyU: "usages", KeyE: "agent-edit" };
+  var agentHandler = null;
+  function setAgentHandler(fn) {
+    agentHandler = fn;
   }
-  function colAtPoint(x, y) {
-    let node, off;
-    if (document.caretPositionFromPoint) {
-      const p = document.caretPositionFromPoint(x, y);
-      if (!p)
-        return null;
-      node = p.offsetNode;
-      off = p.offset;
-    } else if (document.caretRangeFromPoint) {
-      const r2 = document.caretRangeFromPoint(x, y);
-      if (!r2)
-        return null;
-      node = r2.startContainer;
-      off = r2.startOffset;
-    } else
-      return null;
-    const el = node && (node.nodeType === 1 ? node : node.parentElement);
-    const row = el && el.closest(".row");
-    if (!row)
-      return null;
-    const code = $(".c", row);
-    const line = +row.dataset.l;
-    if (!code.contains(node))
-      return { line, col: el.closest(".g") ? 0 : code.textContent.length };
-    const r = document.createRange();
-    r.setStart(code, 0);
-    r.setEnd(node, off);
-    return { line, col: r.toString().length };
-  }
-  function revealCaretX(x) {
-    const d = doc_();
-    if (x == null || S2.wrap || !d)
-      return;
-    const g = rowFor(d.cur)?.querySelector(".g");
-    const gw = g ? g.offsetWidth : 0;
-    if (x < vp.scrollLeft + gw + 8)
-      vp.scrollLeft = Math.max(0, x - gw - 40);
-    else if (x > vp.scrollLeft + vp.clientWidth - 24)
-      vp.scrollLeft = x - vp.clientWidth + 60;
-  }
-  function updateDomSelection() {
-    const d = doc_();
-    if (!d)
-      return;
+  var current = null;
+  var allText = null;
+  var allInfo = null;
+  function getSelectedRangeInfo() {
+    if (S2.selAll)
+      return allInfo;
     const sel = window.getSelection();
-    if (!sel)
-      return;
-    if (!d.selAnchor) {
-      if (sel.rangeCount && !sel.isCollapsed && vp.contains(sel.getRangeAt(0).commonAncestorContainer)) {
-        sel.removeAllRanges();
-      }
-      return;
-    }
-    const pa = toPoint(d.selAnchor);
-    const headCol = d.col === Infinity ? rowFor(d.cur) ? $(".c", rowFor(d.cur)).textContent.length : 0 : d.col || 0;
-    const pf = toPoint({ line: d.cur, col: headCol });
-    if (pa && pf) {
-      sel.setBaseAndExtent(pa[0], pa[1], pf[0], pf[1]);
-    }
-  }
-  function ensureAnchor(d) {
-    if (!d.selAnchor) {
-      const col = d.col === Infinity ? rowFor(d.cur) ? $(".c", rowFor(d.cur)).textContent.length : 0 : d.col || 0;
-      d.selAnchor = { line: d.cur, col };
-    }
-  }
-  function clearSelection(d) {
-    if (d)
-      d.selAnchor = null;
-    const sel = window.getSelection();
-    if (sel && sel.rangeCount && !sel.isCollapsed && vp.contains(sel.getRangeAt(0).commonAncestorContainer)) {
-      sel.removeAllRanges();
-    }
-  }
-  function moveCol(delta, shift = false) {
+    if (!sel || sel.isCollapsed || !sel.rangeCount)
+      return null;
     const d = doc_();
     if (!d)
-      return;
-    if (shift)
-      ensureAnchor(d);
-    else
-      d.selAnchor = null;
-    const row = rowFor(d.cur);
-    const len = row ? $(".c", row).textContent.length : 0;
-    const col = Math.min(d.col || 0, len) + delta;
-    if (col < 0) {
-      if (d.cur > 1) {
-        d.col = Infinity;
-        moveCursor(-1, shift);
-      } else
-        updateDomSelection();
-      return;
+      return null;
+    const range = sel.getRangeAt(0);
+    if (diffviewEl && !diffviewEl.hidden && diffviewEl.contains(range.commonAncestorContainer)) {
+      return diffSelection(range, d);
     }
-    if (col > len) {
-      if (d.cur < d.total) {
-        d.col = 0;
-        moveCursor(1, shift);
-      } else
-        updateDomSelection();
-      return;
+    if (!vp.contains(range.commonAncestorContainer))
+      return null;
+    const text = sel.toString().trim();
+    if (!text)
+      return null;
+    let startEl = range.startContainer;
+    if (startEl.nodeType !== 1)
+      startEl = startEl.parentElement;
+    let endEl = range.endContainer;
+    if (endEl.nodeType !== 1)
+      endEl = endEl.parentElement;
+    const startRow = startEl ? startEl.closest(".row") : null;
+    const endRow = endEl ? endEl.closest(".row") : null;
+    let l1 = d.cur || 1, l2 = d.cur || 1;
+    if (startRow && startRow.dataset.l)
+      l1 = +startRow.dataset.l;
+    if (endRow && endRow.dataset.l)
+      l2 = +endRow.dataset.l;
+    if (l1 > l2) {
+      const tmp = l1;
+      l1 = l2;
+      l2 = tmp;
     }
-    d.col = col;
-    revealCaretX(placeCaret());
-    updateDomSelection();
+    return { text, l1, l2, path: d.path };
   }
-  function moveWord(delta, shift = false) {
-    const d = doc_();
-    if (!d)
-      return;
-    if (shift)
-      ensureAnchor(d);
-    else
-      d.selAnchor = null;
-    const row = rowFor(d.cur);
-    const text = row ? $(".c", row).textContent : "";
-    const len = text.length;
-    let col = Math.min(d.col === Infinity ? len : d.col || 0, len);
-    if (delta < 0) {
-      if (col === 0) {
-        if (d.cur > 1) {
-          d.col = Infinity;
-          moveCursor(-1, shift);
-        }
-        return;
-      }
-      col--;
-      while (col > 0 && /\s/.test(text[col]))
-        col--;
-      if (WORD.test(text[col])) {
-        while (col > 0 && WORD.test(text[col - 1]))
-          col--;
+  function diffSelection(range, d) {
+    let l1 = Infinity, l2 = -Infinity, at1 = Infinity, at2 = -Infinity;
+    const parts = [];
+    const seen = new Set;
+    for (const el of diffviewEl.querySelectorAll("[data-l], [data-at]")) {
+      if (!range.intersectsNode(el))
+        continue;
+      const code = el.querySelector(".diff-code");
+      if (el.dataset.l !== undefined) {
+        const n = +el.dataset.l;
+        if (n < l1)
+          l1 = n;
+        if (n > l2)
+          l2 = n;
+        if (seen.has(n))
+          continue;
+        seen.add(n);
       } else {
-        while (col > 0 && !WORD.test(text[col - 1]) && !/\s/.test(text[col - 1]))
-          col--;
+        const n = +el.dataset.at;
+        if (n < at1)
+          at1 = n;
+        if (n > at2)
+          at2 = n;
       }
-    } else {
-      if (col >= len) {
-        if (d.cur < d.total) {
-          d.col = 0;
-          moveCursor(1, shift);
-        }
-        return;
-      }
-      if (WORD.test(text[col])) {
-        while (col < len && WORD.test(text[col]))
-          col++;
-      } else if (!/\s/.test(text[col])) {
-        while (col < len && !WORD.test(text[col]) && !/\s/.test(text[col]))
-          col++;
-      }
-      while (col < len && /\s/.test(text[col]))
-        col++;
+      parts.push(code ? code.textContent : "");
     }
-    d.col = col;
-    revealCaretX(placeCaret());
-    updateDomSelection();
+    if (!parts.length)
+      return null;
+    if (l1 === Infinity) {
+      const last = Math.max(1, d.total || 1);
+      l1 = Math.min(last, Math.max(1, at1 - 1));
+      l2 = Math.max(l1, Math.min(last, at2));
+    }
+    const text = parts.join(`
+`).trim();
+    if (!text)
+      return null;
+    return { text, l1, l2, path: d.path, fromDiff: true };
   }
-  function caretToEdge(end, shift = false) {
+  var selectionRef = ({ path, l1, l2 }) => path + ":" + (l1 === l2 ? l1 : l1 + "-" + l2);
+  function showSelectionBar(info) {
+    current = info;
+    const lines = info.l2 - info.l1 + 1;
+    statsEl.textContent = (lines === 1 ? "1 line" : lines + " lines") + " · " + info.text.length.toLocaleString() + " chars";
+    status.classList.add("selecting");
+    fitStatus();
+  }
+  function hideSelectionBar() {
+    closeSelMenu();
+    if (!current)
+      return;
+    current = null;
+    if (statsEl)
+      statsEl.textContent = "";
+    status.classList.remove("selecting");
+    fitStatus();
+  }
+  function updateSelectionBar() {
+    const info = getSelectedRangeInfo();
+    if (info)
+      showSelectionBar(info);
+    else
+      hideSelectionBar();
+  }
+  function selectAll() {
     const d = doc_();
     if (!d)
       return;
-    if (shift)
-      ensureAnchor(d);
-    else
-      d.selAnchor = null;
-    d.col = end ? Infinity : 0;
-    revealCaretX(placeCaret());
-    updateDomSelection();
-  }
-  function moveCursor(delta, shift = false) {
-    const d = doc_();
-    if (!d)
-      return;
-    if (shift)
-      ensureAnchor(d);
-    else
-      d.selAnchor = null;
-    d.cur = Math.max(1, Math.min(d.total, d.cur + delta));
-    const y = (d.cur - 1) * LH2;
-    if (y < vp.scrollTop)
-      vp.scrollTop = y - LH2;
-    else if (y > vp.scrollTop + vp.clientHeight - LH2 * 2)
-      vp.scrollTop = y - vp.clientHeight + LH2 * 3;
+    window.getSelection()?.removeAllRanges();
+    S2.selAll = d;
+    allInfo = null;
     render();
-    updateStatus();
-    updateDomSelection();
-  }
-  function initCursor() {
-    vp.addEventListener("mousedown", (e) => {
-      if (e.button !== 0)
+    const text = allText = fetch("/api/raw?path=" + encodeURIComponent(d.path)).then((r) => {
+      if (!r.ok)
+        throw new Error(r.statusText);
+      return r.text();
+    });
+    text.then((t) => {
+      if (allText !== text)
         return;
-      const row = e.target.closest(".row");
+      allInfo = { text: t, l1: 1, l2: d.total, path: d.path };
+      showSelectionBar(allInfo);
+    }, () => {
+      if (allText !== text)
+        return;
+      clearSelectAll();
+      showToast("!", "Could not read " + d.path);
+    });
+  }
+  function clearSelectAll() {
+    if (!S2.selAll)
+      return;
+    S2.selAll = null;
+    allText = null;
+    allInfo = null;
+    render();
+    hideSelectionBar();
+  }
+  function copySelectAll() {
+    const d = S2.selAll;
+    if (!d || !allText)
+      return false;
+    allText.then((t) => copyToClipboard(t, "Copied " + d.path + " (" + d.total.toLocaleString() + " lines)"), () => {});
+    return true;
+  }
+  function runSelectionAction(act) {
+    if (!current) {
+      if (act === "agent-edit") {
+        const d = doc_();
+        if (d && agentHandler) {
+          const line = d.cur || 1;
+          const text = d.lines && d.lines[line - 1] || "";
+          agentHandler({ text, l1: line, l2: line, path: d.path });
+          return true;
+        }
+      }
+      return false;
+    }
+    const { text, path } = current;
+    const ref = selectionRef(current);
+    if (act === "copy-ref") {
+      copyToClipboard(ref, "Copied");
+    } else if (act === "copy-agent") {
+      const ext = path.split(".").pop() || "";
+      const lineStr = current.l1 === current.l2 ? "line " + current.l1 : "lines " + current.l1 + "-" + current.l2;
+      const snippet = "@" + path + " " + lineStr + "\n```" + ext + `
+` + text + "\n```";
+      copyToClipboard(snippet, "Copied");
+    } else if (act === "agent-edit") {
+      if (!agentHandler)
+        return false;
+      agentHandler(current);
+    } else if (act === "usages") {
+      findReferences(text.split(/\s+/)[0] || text);
+    } else {
+      return false;
+    }
+    return true;
+  }
+  var menu = $("#sel-menu");
+  function closeSelMenu() {
+    if (menu && !menu.hidden)
+      menu.hidden = true;
+  }
+  var SEL_MENU_ITEMS = [
+    { sel: "copy-ref", label: "Copy Ref", keys: "Alt+C" },
+    { sel: "copy-agent", label: "Copy with Context", keys: "Alt+A" },
+    { sel: "agent-edit", label: "Edit Inline", keys: "Alt+E" },
+    { sel: "usages", label: "Find Usages", keys: "Alt+U" }
+  ];
+  function openSelMenu(x, y) {
+    menu.replaceChildren();
+    for (const item of SEL_MENU_ITEMS) {
+      const btn = document.createElement("button");
+      btn.className = "sel-menu-item";
+      btn.dataset.sel = item.sel;
+      btn.setAttribute("role", "menuitem");
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      btn.append(label);
+      const kbd = document.createElement("kbd");
+      kbd.className = "footer-kbd";
+      kbd.textContent = keyLabel(item.keys);
+      btn.append(kbd);
+      menu.append(btn);
+    }
+    menu.hidden = false;
+    const { offsetWidth: w, offsetHeight: h } = menu;
+    menu.style.left = Math.max(4, x + w > innerWidth - 4 ? x - w : x) + "px";
+    menu.style.top = Math.max(4, y + h > innerHeight - 4 ? y - h : y) + "px";
+  }
+  var bar = () => $("#footer-sel");
+  function initSelectionBar() {
+    document.addEventListener("mouseup", () => setTimeout(updateSelectionBar, 20));
+    vp.addEventListener("keyup", (e) => {
+      if (e.shiftKey)
+        setTimeout(updateSelectionBar, 20);
+    });
+    document.addEventListener("selectionchange", () => updateSelectionBar());
+    document.addEventListener("mousedown", (e) => {
+      if (!S2.selAll || e.button === 2 || e.target.closest?.("#footer-sel, #sel-menu"))
+        return;
+      if (e.target === vp && (e.offsetX >= vp.clientWidth || e.offsetY >= vp.clientHeight))
+        return;
+      clearSelectAll();
+    }, true);
+    for (const el of [bar(), menu]) {
+      if (!el)
+        continue;
+      el.addEventListener("mousedown", (e) => e.preventDefault());
+      el.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-sel]");
+        if (!btn)
+          return;
+        closeSelMenu();
+        runSelectionAction(btn.dataset.sel);
+      });
+    }
+    if (!menu)
+      return;
+    document.addEventListener("contextmenu", (e) => {
+      if (menu.contains(e.target)) {
+        e.preventDefault();
+        return;
+      }
+      const inCode = vp.contains(e.target) || diffviewEl && !diffviewEl.hidden && diffviewEl.contains(e.target);
+      if (!inCode) {
+        closeSelMenu();
+        return;
+      }
+      updateSelectionBar();
+      if (!current) {
+        closeSelMenu();
+        return;
+      }
+      e.preventDefault();
+      openSelMenu(e.clientX, e.clientY);
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (!menu.hidden && !menu.contains(e.target))
+        closeSelMenu();
+    }, true);
+    addEventListener("keydown", (e) => {
+      if (e.key === "Escape")
+        closeSelMenu();
+    });
+    addEventListener("resize", closeSelMenu);
+    addEventListener("blur", closeSelMenu);
+    document.addEventListener("scroll", closeSelMenu, true);
+  }
+
+  // web/src/diff.js
+  var diffview = $("#diffview");
+  var diffContent = $("#diffcontent");
+  var shown = null;
+  function setLayoutPref(mode) {
+    try {
+      localStorage.setItem("px0.diffLayout", mode);
+    } catch {}
+  }
+  function layoutPref() {
+    try {
+      return localStorage.getItem("px0.diffLayout") || "split";
+    } catch {
+      return "split";
+    }
+  }
+  function syncDiffView(force = false) {
+    const d = doc_();
+    const want = d && d.diffMode ? d : null;
+    if (force && want) {
+      want.diffText = undefined;
+      want.diffHunks = undefined;
+    }
+    if (want !== shown || force) {
+      shown = want;
+      diffview.hidden = !want;
+      if (want)
+        drawDiff(want, force);
+      else
+        diffContent.replaceChildren();
+    } else if (want && want.diffHunks !== undefined) {
+      renderDiff(want);
+    }
+  }
+  function diffScrollTop() {
+    return diffview.hidden ? 0 : diffview.scrollTop;
+  }
+  async function toggleDiff() {
+    if (!S2.meta?.git)
+      return;
+    const d = doc_();
+    if (!d)
+      return;
+    if (!d.diffMode && !d.diffAvailable) {
+      setStatusNote("No diff — clean file or not a git repo", 4000);
+      return;
+    }
+    setDiffMode(d.diffMode ? "source" : layoutPref() || "split");
+  }
+  async function setDiffMode(mode) {
+    const d = doc_();
+    if (!d)
+      return;
+    if (mode !== "source" && !d.diffAvailable) {
+      setStatusNote("No diff — clean file or not a git repo", 4000);
+      return;
+    }
+    if (mode === "source") {
+      d.diffMode = null;
+      d.diffDismissed = true;
+    } else {
+      d.diffMode = mode;
+      d.diffDismissed = false;
+      setLayoutPref(mode);
+    }
+    syncPreview();
+    syncDiffView();
+    updateStatus();
+  }
+  async function drawDiff(d, force = false) {
+    if (force || d.diffText === undefined) {
+      diffContent.replaceChildren();
+      try {
+        d.diffReq = api("/api/diff", { path: d.path });
+        const j = await d.diffReq;
+        d.diffText = j.diff || "";
+        d.diffHunks = parseDiff(d.diffText);
+      } catch (e) {
+        d.diffText = "";
+        d.diffHunks = [];
+        setStatusNote("No diff: " + e.message, 4000);
+      } finally {
+        d.diffReq = null;
+      }
+      if (shown !== d)
+        return;
+    }
+    renderDiff(d);
+    if (d.diffScroll) {
+      diffview.scrollTop = d.diffScroll;
+      d.diffScroll = 0;
+    }
+  }
+  function renderDiff(d) {
+    diffContent.replaceChildren();
+    if (!d.diffHunks || !d.diffHunks.length) {
+      const p = document.createElement("div");
+      p.className = "diff-empty";
+      p.textContent = "No changes against HEAD.";
+      diffContent.append(p);
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const hunk of d.diffHunks) {
+      frag.append(hunkHeader(hunk));
+      frag.append(d.diffMode === "unified" ? unifiedTable(hunk) : splitTable(hunk));
+    }
+    diffContent.append(frag);
+    syncDiffAgentTargets();
+  }
+  function syncDiffAgentTargets() {
+    if (!diffview || diffview.hidden)
+      return;
+    const d = doc_();
+    if (!d)
+      return;
+    const ranges = (S2.agentTargets || []).filter((t) => t.path === d.path);
+    for (const el of diffview.querySelectorAll("[data-l]")) {
+      const l = +el.dataset.l;
+      const inAgent = ranges.some((r) => l >= r.l1 && l <= r.l2);
+      const isAnchor = ranges.some((r) => l === r.l1);
+      el.classList.toggle("agent-sel", inAgent);
+      el.classList.toggle("agent-anchor", isAnchor);
+    }
+  }
+  function hunkHeader(hunk) {
+    const el = document.createElement("div");
+    el.className = "diff-hunk-head";
+    el.textContent = "@@ -" + hunk.oldStart + " +" + hunk.newStart + " @@";
+    return el;
+  }
+  var HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@[ \t]?(.*)$/;
+  function parseDiff(text) {
+    if (!text)
+      return [];
+    const hunks = [];
+    let cur = null, oldLine = 0, newLine = 0;
+    for (const line of text.split(`
+`)) {
+      const m = HUNK_RE.exec(line);
+      if (m) {
+        oldLine = +m[1];
+        newLine = +m[3];
+        cur = { oldStart: oldLine, newStart: newLine, section: m[5] || "", rows: [] };
+        hunks.push(cur);
+        continue;
+      }
+      if (!cur || line === "" || line.startsWith("\\"))
+        continue;
+      const c = line[0], body = line.slice(1);
+      if (c === "+")
+        cur.rows.push({ type: "add", newLine: newLine++, text: body });
+      else if (c === "-")
+        cur.rows.push({ type: "del", oldLine: oldLine++, at: newLine, text: body });
+      else
+        cur.rows.push({ type: "ctx", oldLine: oldLine++, newLine: newLine++, text: body });
+    }
+    return hunks;
+  }
+  function unifiedTable(hunk) {
+    const table = document.createElement("div");
+    table.className = "diff-table diff-unified";
+    for (const row of hunk.rows) {
+      const r = document.createElement("div");
+      r.className = "diff-row diff-" + row.type;
+      anchor(r, row);
+      r.append(lineCell(row.type === "add" ? "" : row.oldLine), lineCell(row.type === "del" ? "" : row.newLine), markerCell(row.type), codeCell(row.text));
+      table.append(r);
+    }
+    return table;
+  }
+  function splitTable(hunk) {
+    const table = document.createElement("div");
+    table.className = "diff-table diff-split";
+    for (const pair of pairRows(hunk.rows)) {
+      const r = document.createElement("div");
+      r.className = "diff-row-pair";
+      r.append(splitSide(pair.left, "left"), splitSide(pair.right, "right"));
+      table.append(r);
+    }
+    return table;
+  }
+  function pairRows(rows) {
+    const pairs = [];
+    let i = 0;
+    while (i < rows.length) {
+      const row = rows[i];
+      if (row.type === "ctx") {
+        pairs.push({ left: row, right: row });
+        i++;
+        continue;
+      }
+      let dels = [], adds = [];
+      while (i < rows.length && rows[i].type === "del")
+        dels.push(rows[i++]);
+      while (i < rows.length && rows[i].type === "add")
+        adds.push(rows[i++]);
+      const n = Math.max(dels.length, adds.length);
+      for (let k = 0;k < n; k++)
+        pairs.push({ left: dels[k] || null, right: adds[k] || null });
+    }
+    return pairs;
+  }
+  function splitSide(row, side) {
+    const el = document.createElement("div");
+    el.className = "diff-side diff-side-" + side + (row ? " diff-" + row.type : " diff-blank");
+    if (!row) {
+      el.append(lineCell(""), markerCell(""), codeCell(""));
+      return el;
+    }
+    const ln = side === "left" ? row.oldLine : row.newLine;
+    anchor(el, row);
+    el.append(lineCell(ln), markerCell(row.type), codeCell(row.text));
+    return el;
+  }
+  function anchor(el, row) {
+    if (row.newLine !== undefined)
+      el.dataset.l = row.newLine;
+    else if (row.at !== undefined)
+      el.dataset.at = row.at;
+  }
+  function lineCell(n) {
+    const el = document.createElement("div");
+    el.className = "diff-ln";
+    el.textContent = n === "" || n === undefined ? "" : String(n);
+    return el;
+  }
+  var MARKS = { add: "+", del: "-", ctx: "" };
+  function markerCell(type) {
+    const el = document.createElement("div");
+    el.className = "diff-mk";
+    el.textContent = MARKS[type] || "";
+    return el;
+  }
+  function codeCell(text) {
+    const el = document.createElement("div");
+    el.className = "diff-code";
+    el.innerHTML = esc2(text || "") || "&nbsp;";
+    return el;
+  }
+  function initDiff() {
+    const sw = $("#diff-switch");
+    if (!sw)
+      return;
+    sw.addEventListener("mousedown", (e) => {
+      if (!e.target.closest("button"))
+        e.preventDefault();
+    });
+    $("#diff-source")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setDiffMode("source");
+    });
+    $("#diff-btn")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setDiffMode(doc_()?.diffMode || layoutPref());
+    });
+    const menu = $("#diff-menu");
+    if (menu) {
+      menu.addEventListener("click", (e) => {
+        const item = e.target.closest("[data-diff-opt]");
+        if (!item)
+          return;
+        e.stopPropagation();
+        setDiffMode(item.dataset.diffOpt);
+        item.blur();
+      });
+    }
+  }
+
+  // web/src/agent.js
+  var box = $("#agentbox");
+  var tpl = $("#agentbox-tpl");
+  var agentListEl = $("#agentbox-list");
+  var batchBar = $("#agent-batch-bar");
+  var batchCount = $("#agent-batch-count");
+  var batchClear = $("#agent-batch-clear");
+  var batchHarness = $("#agent-batch-harness");
+  var batchModel = $("#agent-batch-model");
+  var batchHint = $("#agent-batch-hint");
+  var batchApply = $("#agent-batch-apply");
+  var batchCancel = $("#agent-batch-cancel");
+  var batchErr = $("#agent-batch-err");
+  var sessions = new Map;
+  var agentSeq = 0;
+  var batchTimer = null;
+  var batchJobId = null;
+  var batchElapsed = "";
+  var activeBatchTargets = null;
+  var installed = () => (S2.meta?.agents || []).filter((h) => h.installed);
+  var chosen = () => S2.meta && S2.meta.agent || "";
+  var chosenModel = () => S2.meta && S2.meta.agentModel || "";
+  var targetRef = ({ path, l1, l2 }) => path + ":" + (l1 === l2 ? l1 : l1 + "-" + l2);
+  var rangesOverlap = (a, b) => a.path === b.path && a.l1 <= b.l2 && b.l1 <= a.l2;
+  function applyAgentMeta() {
+    for (const session of sessions.values()) {
+      updateSessionMeta(session);
+    }
+    syncBatchMeta();
+  }
+  function updateSessionMeta(session) {
+    if (!session.harnessSelect || !session.modelSelect)
+      return;
+    const ready = (S2.meta?.agents || []).filter((h) => h.installed);
+    const currentHarness = chosen();
+    const currentModel = chosenModel();
+    session.harnessSelect.innerHTML = "";
+    if (!ready.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "no harness";
+      session.harnessSelect.appendChild(opt);
+      session.harnessSelect.disabled = true;
+      session.modelSelect.innerHTML = "";
+      session.modelSelect.hidden = true;
+      return;
+    }
+    for (const h of ready) {
+      const opt = document.createElement("option");
+      opt.value = h.name;
+      opt.textContent = h.name;
+      if (h.name === currentHarness)
+        opt.selected = true;
+      session.harnessSelect.appendChild(opt);
+    }
+    const isBusy = session.el.classList.contains("busy");
+    session.harnessSelect.disabled = isBusy || !!(S2.meta && S2.meta.agentPinned);
+    session.harnessSelect.title = S2.meta && S2.meta.agentPinned ? "Fixed for this run by -agent" : "Change the coding harness";
+    const activeH = ready.find((h) => h.name === (session.harnessSelect.value || currentHarness)) || ready[0];
+    session.modelSelect.innerHTML = "";
+    const models = activeH?.models || [];
+    if (models.length > 0) {
+      for (const m of models) {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        if (m === currentModel)
+          opt.selected = true;
+        session.modelSelect.appendChild(opt);
+      }
+      session.modelSelect.hidden = false;
+      session.modelSelect.disabled = isBusy;
+      session.modelSelect.title = "Model for " + activeH.name;
+    } else {
+      session.modelSelect.hidden = true;
+    }
+  }
+  async function loadAgentAsync() {
+    try {
+      const j = await api("/api/agent/harnesses");
+      S2.meta.agents = j.harnesses || [];
+      S2.meta.agent = j.selected || S2.meta.agent || "";
+      S2.meta.agentModel = j.model || S2.meta.agentModel || "";
+      S2.meta.agentPinned = !!j.pinned;
+      applyAgentMeta();
+    } catch {}
+  }
+  function syncBatchMeta() {
+    if (!batchHarness || !batchModel)
+      return;
+    const ready = installed();
+    const currentHarness = chosen();
+    const currentModel = chosenModel();
+    batchHarness.innerHTML = "";
+    if (!ready.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "no harness";
+      batchHarness.appendChild(opt);
+      batchHarness.disabled = true;
+      batchModel.innerHTML = "";
+      batchModel.hidden = true;
+      return;
+    }
+    for (const h of ready) {
+      const opt = document.createElement("option");
+      opt.value = h.name;
+      opt.textContent = h.name;
+      if (h.name === currentHarness)
+        opt.selected = true;
+      batchHarness.appendChild(opt);
+    }
+    const isBusy = !!batchJobId;
+    batchHarness.disabled = isBusy || !!(S2.meta && S2.meta.agentPinned);
+    batchHarness.title = S2.meta && S2.meta.agentPinned ? "Fixed for this run by -agent" : "Change the coding harness";
+    const activeH = ready.find((h) => h.name === (batchHarness.value || currentHarness)) || ready[0];
+    batchModel.innerHTML = "";
+    const models = activeH?.models || [];
+    if (models.length > 0) {
+      for (const m of models) {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        if (m === currentModel)
+          opt.selected = true;
+        batchModel.appendChild(opt);
+      }
+      batchModel.hidden = false;
+      batchModel.disabled = isBusy;
+      batchModel.title = "Model for " + activeH.name;
+    } else {
+      batchModel.hidden = true;
+    }
+  }
+  function getReadySessions() {
+    return [...sessions.values()].filter((s) => !s.timer && !s.jobId);
+  }
+  function syncBatchBar() {
+    if (!batchBar)
+      return;
+    const total = sessions.size;
+    const ready = getReadySessions();
+    const readyCount = ready.length;
+    const runningCount = total - readyCount;
+    box.classList.toggle("has-batch", total >= 2);
+    if (total >= 2 || batchJobId) {
+      batchBar.hidden = false;
+      if (batchJobId) {
+        if (batchCount) {
+          batchCount.textContent = readyCount > 0 ? readyCount + " remaining (" + (activeBatchTargets?.length || 0) + " in batch)" : (activeBatchTargets?.length || 0) + " in batch";
+        }
+        if (batchApply)
+          batchApply.hidden = true;
+        if (batchCancel)
+          batchCancel.hidden = false;
+      } else {
+        if (batchCount) {
+          if (runningCount > 0) {
+            batchCount.textContent = readyCount + " remaining (" + runningCount + " running)";
+          } else {
+            batchCount.textContent = readyCount + " comments";
+          }
+        }
+        if (batchApply) {
+          batchApply.hidden = false;
+          batchApply.disabled = readyCount === 0;
+          const btnLabel = runningCount > 0 ? "Apply Remaining (" + readyCount + ")" : "Apply All (" + readyCount + ")";
+          batchApply.textContent = btnLabel;
+          batchApply.title = btnLabel + " (" + keyLabel("Mod+Enter") + ")";
+        }
+        if (batchCancel)
+          batchCancel.hidden = true;
+        if (batchHint) {
+          batchHint.textContent = readyCount > 0 ? keyLabel("Mod+Enter") + " to apply " + (runningCount > 0 ? "remaining" : "all") : runningCount > 0 ? runningCount + " running..." : "";
+        }
+      }
+      syncBatchMeta();
+    } else {
+      batchBar.hidden = true;
+    }
+  }
+  function anyInFlight() {
+    if (batchTimer || batchJobId)
+      return true;
+    for (const s of sessions.values())
+      if (s.timer || s.jobId)
+        return true;
+    return false;
+  }
+  function syncBoxVisibility() {
+    box.hidden = sessions.size === 0;
+    syncBatchBar();
+  }
+  function openAgentEdit(info) {
+    if (!info)
+      return;
+    for (const s of sessions.values()) {
+      if (rangesOverlap(s.target, info)) {
+        showToast("!", "Overlaps the edit already open on " + targetRef(s.target));
+        return;
+      }
+    }
+    const session = createSession(info);
+    sessions.set(session.id, session);
+    syncAgentTargets();
+    applyAgentMeta();
+    syncBoxVisibility();
+    if (chosen() && installed().some((h) => h.name === chosen())) {
+      showCompose(session);
+    } else {
+      showPicker(session);
+    }
+  }
+  function syncAgentTargets() {
+    S2.agentTargets = [...sessions.values()].map((s) => ({
+      id: s.id,
+      path: s.target.path,
+      l1: s.target.l1,
+      l2: s.target.l2
+    }));
+    render();
+    syncDiffAgentTargets();
+  }
+  function createSession(info) {
+    const el = tpl.content.firstElementChild.cloneNode(true);
+    const parent = agentListEl || box;
+    const existing = [...parent.children];
+    let inserted = false;
+    for (const child of existing) {
+      const s = [...sessions.values()].find((sess) => sess.el === child);
+      if (s && s.target) {
+        if (s.target.path === info.path && s.target.l1 > info.l1) {
+          parent.insertBefore(el, child);
+          inserted = true;
+          break;
+        }
+      }
+    }
+    if (!inserted) {
+      parent.appendChild(el);
+    }
+    const session = {
+      id: ++agentSeq,
+      target: info,
+      timer: null,
+      jobId: null,
+      harness: "",
+      el,
+      refEl: el.querySelector(".agent-ref"),
+      metaEl: el.querySelector(".agent-meta"),
+      harnessSelect: el.querySelector(".agent-harness-select"),
+      modelSelect: el.querySelector(".agent-model-select"),
+      closeBtn: el.querySelector(".agent-close"),
+      pickEl: el.querySelector(".agent-pick"),
+      composeEl: el.querySelector(".agent-compose"),
+      input: el.querySelector(".agent-input"),
+      sendBtn: el.querySelector(".agent-send"),
+      cancelBtn: el.querySelector(".agent-cancel"),
+      hintEl: el.querySelector(".agent-hint"),
+      errEl: el.querySelector(".agent-err")
+    };
+    wireSession(session);
+    refreshRef(session);
+    setBusy(session, false);
+    resetHint(session);
+    clearErr(session);
+    session.input.value = "";
+    el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    session.input.focus();
+    return session;
+  }
+  function wireSession(session) {
+    session.sendBtn.addEventListener("click", () => submit(session));
+    session.cancelBtn?.addEventListener("click", () => cancelSession(session));
+    session.closeBtn.addEventListener("click", () => closeAgentEdit(session));
+    if (session.refEl) {
+      session.refEl.addEventListener("click", () => {
+        openFile(session.target.path, { line: session.target.l1 });
+      });
+    }
+    if (session.harnessSelect) {
+      session.harnessSelect.addEventListener("change", async () => {
+        const hName = session.harnessSelect.value;
+        if (!hName)
+          return;
+        await select(hName, (msg) => showErr(session, msg));
+        session.input.focus();
+      });
+    }
+    if (session.modelSelect) {
+      session.modelSelect.addEventListener("change", async () => {
+        const hName = session.harnessSelect?.value || chosen();
+        const mName = session.modelSelect.value;
+        await select(hName, mName, (msg) => showErr(session, msg));
+        session.input.focus();
+      });
+    }
+    session.el.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (session.timer || session.jobId) {
+          cancelSession(session);
+        } else {
+          closeAgentEdit(session);
+        }
+      } else if ((e[MOD] || e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        submitBatch();
+      } else if (e.key === "Enter" && !e.shiftKey && !session.composeEl.hidden && !session.timer && !session.jobId) {
+        e.preventDefault();
+        submit(session);
+      }
+    });
+  }
+  async function cancelSession(session) {
+    if (!session.timer && !session.jobId)
+      return;
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+    const jobId = session.jobId;
+    session.jobId = null;
+    setBusy(session, false);
+    resetHint(session);
+    syncBatchBar();
+    refreshStatusNote();
+    showToast("!", "Cancelled edit on " + targetRef(session.target));
+    if (jobId) {
+      try {
+        await apiPost("/api/agent/cancel", { id: jobId });
+      } catch {}
+    }
+    session.input.focus();
+  }
+  function closeAgentEdit(session) {
+    if (session.timer || session.jobId) {
+      cancelSession(session);
+    }
+    sessions.delete(session.id);
+    session.el.remove();
+    syncBoxVisibility();
+    syncAgentTargets();
+  }
+  function refreshRef(session) {
+    const ref = targetRef(session.target);
+    session.refEl.textContent = ref;
+    session.refEl.title = ref + " (click to jump)";
+  }
+  function clearErr(session) {
+    const errEl = session.errEl;
+    if (!errEl)
+      return;
+    errEl.textContent = "";
+    errEl.hidden = true;
+  }
+  function showErr(session, msg, streams = []) {
+    const errEl = session.errEl;
+    if (!errEl)
+      return;
+    errEl.textContent = "";
+    const head = document.createElement("div");
+    head.className = "agent-err-msg";
+    head.textContent = msg;
+    errEl.appendChild(head);
+    for (const [label, text] of streams) {
+      if (!text)
+        continue;
+      const name = document.createElement("div");
+      name.className = "agent-err-label";
+      name.textContent = label;
+      const pre = document.createElement("pre");
+      pre.className = "agent-err-out";
+      pre.textContent = text;
+      errEl.append(name, pre);
+    }
+    errEl.hidden = false;
+  }
+  function resetHint(session) {
+    if (!session.hintEl)
+      return;
+    session.hintEl.textContent = "Enter to send, " + keyLabel("Mod+Enter") + " all, Esc to cancel";
+  }
+  function setBusy(session, busy, msg) {
+    session.el.classList.toggle("busy", busy);
+    session.input.disabled = busy;
+    if (session.sendBtn)
+      session.sendBtn.hidden = busy;
+    if (session.cancelBtn)
+      session.cancelBtn.hidden = !busy;
+    session.closeBtn.disabled = false;
+    if (session.harnessSelect)
+      session.harnessSelect.disabled = busy || !!(S2.meta && S2.meta.agentPinned);
+    if (session.modelSelect)
+      session.modelSelect.disabled = busy;
+    if (session.hintEl && msg)
+      session.hintEl.textContent = msg;
+  }
+  function showCompose(session) {
+    session.pickEl.hidden = true;
+    if (session.metaEl)
+      session.metaEl.hidden = false;
+    session.composeEl.hidden = false;
+    session.input.focus();
+  }
+  async function showPicker(session) {
+    session.composeEl.hidden = true;
+    if (session.metaEl)
+      session.metaEl.hidden = true;
+    session.pickEl.hidden = false;
+    session.pickEl.innerHTML = '<div class="hint">Looking for coding harnesses…</div>';
+    let list = S2.meta?.agents || [];
+    let settingsPath = "";
+    try {
+      const j = await api("/api/agent/harnesses");
+      list = j.harnesses || [];
+      settingsPath = j.settings || "";
+      S2.meta.agents = list;
+      S2.meta.agent = j.selected || "";
+      S2.meta.agentModel = j.model || "";
+      S2.meta.agentPinned = !!j.pinned;
+    } catch (e) {
+      session.pickEl.innerHTML = '<div class="hint">Could not look for harnesses: ' + esc2(e.message) + "</div>";
+      return;
+    }
+    const ready = list.filter((h) => h.installed);
+    if (!ready.length) {
+      showToast("!", "Could not find any coding harness like Claude Code, OpenCode, Codex, Antigravity, Aider, etc. Install one and restart px0.", 6000);
+      session.pickEl.innerHTML = '<div class="hint" style="line-height: 1.5; padding: 4px 2px;">' + "Could not find any coding harness like <b>Claude Code</b>, <b>OpenCode</b>, <b>Codex</b>, <b>Antigravity</b> (<code>agy</code>), <b>Aider</b>, <b>Goose</b>, <b>Gemini CLI</b>, or <b>Cursor Agent</b>.<br><br>" + "Please install a coding harness, make sure it is on your <code>PATH</code>, and restart px0 after that.</div>";
+      return;
+    }
+    session.pickEl.innerHTML = '<div class="hint">This harness will edit files in this workspace.</div>' + optionsHtml(ready, settingsPath);
+    session.pickEl.querySelectorAll("[data-pick]").forEach((b) => {
+      b.addEventListener("click", () => pick(session, b.dataset.pick));
+    });
+    session.pickEl.querySelectorAll(".agent-model-select").forEach((sel) => {
+      sel.addEventListener("change", async (e) => {
+        e.stopPropagation();
+        await select(sel.dataset.harness, sel.value, (msg) => showErr(session, msg));
+        showPicker(session);
+      });
+    });
+  }
+  function optionsHtml(ready, settingsPath) {
+    let html = "";
+    for (const h of ready) {
+      const isSelected = h.name === chosen();
+      html += '<div class="agent-opt-wrap">' + '<button class="agent-opt' + (isSelected ? " on" : "") + '" data-pick="' + esc2(h.name) + '">' + '<span class="agent-opt-name">' + esc2(h.name) + "</span>" + '<code class="agent-opt-cmd">' + esc2(h.cmd) + "</code></button>";
+      if (isSelected && h.models && h.models.length > 0) {
+        html += '<div class="agent-model-row">' + '<span class="agent-model-label">Model:</span>' + '<select class="agent-model-select" data-harness="' + esc2(h.name) + '">';
+        for (const m of h.models) {
+          const sel = m === (h.model || chosenModel()) ? " selected" : "";
+          html += '<option value="' + esc2(m) + '"' + sel + ">" + esc2(m) + "</option>";
+        }
+        html += "</select></div>";
+      }
+      html += "</div>";
+    }
+    if (settingsPath)
+      html += '<div class="agent-note">Remembered in ' + esc2(settingsPath) + "</div>";
+    return html;
+  }
+  async function pick(session, name) {
+    if (await select(name, (msg) => showErr(session, msg)))
+      showCompose(session);
+  }
+  async function select(name, model, onError) {
+    if (typeof model === "function") {
+      onError = model;
+      model = "";
+    }
+    try {
+      const params = { name };
+      if (model)
+        params.model = model;
+      const j = await apiPost("/api/agent/select", params);
+      S2.meta.agent = j.selected || "";
+      S2.meta.agentModel = j.model || "";
+      S2.meta.agents = j.harnesses || S2.meta.agents;
+      S2.meta.agentPinned = !!j.pinned;
+    } catch (e) {
+      if (onError)
+        onError(e.message);
+      return false;
+    }
+    applyAgentMeta();
+    return true;
+  }
+  async function submit(session) {
+    if (session.timer)
+      return;
+    clearErr(session);
+    const instruction = session.input.value.trim();
+    if (!instruction || !session.target)
+      return;
+    const params = { path: session.target.path, l1: session.target.l1, l2: session.target.l2, instruction };
+    let job;
+    try {
+      job = await apiPost("/api/agent/edit", params);
+    } catch (e) {
+      showErr(session, e.message);
+      return;
+    }
+    session.jobId = job.id;
+    session.harness = job.harness;
+    hideSelectionBar();
+    const initialNote = "Editing with " + (chosenModel() ? chosen() + " (" + chosenModel() + ")" : chosen()) + "...";
+    setBusy(session, true, initialNote);
+    syncBatchBar();
+    refreshStatusNote();
+    session.timer = setTimeout(() => tick(session), 400);
+  }
+  async function tick(session) {
+    if (!session.jobId)
+      return;
+    let j;
+    try {
+      j = await api("/api/agent/job?id=" + session.jobId);
+    } catch (e) {
+      if (!session.jobId)
+        return;
+      session.timer = null;
+      if (e.body && "running" in e.body) {
+        await finish(session, e.body);
+        refreshStatusNote();
+        return;
+      }
+      setBusy(session, false);
+      resetHint(session);
+      syncBatchBar();
+      refreshStatusNote();
+      showErr(session, e.message);
+      return;
+    }
+    if (!session.jobId)
+      return;
+    if (j.running) {
+      session.harness = j.harness;
+      session.elapsed = Math.round((j.ms || 0) / 1000) + "s";
+      setBusy(session, true, "Editing with " + j.harness + "... " + session.elapsed);
+      refreshStatusNote();
+      session.timer = setTimeout(() => tick(session), 600);
+      return;
+    }
+    session.timer = null;
+    await finish(session, j);
+    refreshStatusNote();
+  }
+  function setBatchBusy(busy, msg) {
+    if (!batchBar)
+      return;
+    batchBar.classList.toggle("busy", busy);
+    if (batchApply)
+      batchApply.hidden = busy;
+    if (batchCancel)
+      batchCancel.hidden = !busy;
+    if (batchClear)
+      batchClear.disabled = busy;
+    if (batchHarness)
+      batchHarness.disabled = busy || !!(S2.meta && S2.meta.agentPinned);
+    if (batchModel)
+      batchModel.disabled = busy;
+    if (batchHint) {
+      if (msg)
+        batchHint.textContent = msg;
+      else
+        batchHint.textContent = keyLabel("Mod+Enter") + " to apply all";
+    }
+  }
+  function clearBatchErr() {
+    if (!batchErr)
+      return;
+    batchErr.textContent = "";
+    batchErr.hidden = true;
+  }
+  function showBatchErr(msg, streams = []) {
+    if (!batchErr)
+      return;
+    batchErr.textContent = "";
+    const head = document.createElement("div");
+    head.className = "agent-err-msg";
+    head.textContent = msg;
+    batchErr.appendChild(head);
+    for (const [label, text] of streams) {
+      if (!text)
+        continue;
+      const name = document.createElement("div");
+      name.className = "agent-err-label";
+      name.textContent = label;
+      const pre = document.createElement("pre");
+      pre.className = "agent-err-out";
+      pre.textContent = text;
+      batchErr.append(name, pre);
+    }
+    batchErr.hidden = false;
+  }
+  async function submitBatch() {
+    if (batchTimer || batchJobId)
+      return;
+    clearBatchErr();
+    const ready = getReadySessions();
+    const targets = [];
+    for (const s of ready) {
+      const ins = s.input.value.trim();
+      if (ins && s.target) {
+        targets.push({ session: s, item: { path: s.target.path, l1: s.target.l1, l2: s.target.l2, instruction: ins } });
+      }
+    }
+    if (!targets.length) {
+      if (ready.length > 0) {
+        showToast("!", "Please enter an instruction for the remaining comment(s)");
+        ready[0].input.focus();
+      } else {
+        showToast("!", "All open edits are already in progress");
+      }
+      return;
+    }
+    if (targets.length === 1) {
+      submit(targets[0].session);
+      return;
+    }
+    const harnessName = chosen();
+    if (!harnessName) {
+      showToast("!", "Please select a coding harness first");
+      return;
+    }
+    let job;
+    try {
+      job = await apiPostJson("/api/agent/batch", { edits: targets.map((t) => t.item) });
+    } catch (e) {
+      showBatchErr(e.message);
+      return;
+    }
+    batchJobId = job.id;
+    activeBatchTargets = targets;
+    batchElapsed = "";
+    hideSelectionBar();
+    const initialNote = "Batch editing " + targets.length + " items with " + (chosenModel() ? chosen() + " (" + chosenModel() + ")" : chosen()) + "...";
+    setBatchBusy(true, initialNote);
+    for (const t of targets) {
+      setBusy(t.session, true, "Applying in batch...");
+    }
+    syncBatchBar();
+    refreshStatusNote();
+    batchTimer = setTimeout(() => tickBatch(targets), 400);
+  }
+  async function tickBatch(targets) {
+    if (!batchJobId)
+      return;
+    let j;
+    try {
+      j = await api("/api/agent/job?id=" + batchJobId);
+    } catch (e) {
+      if (!batchJobId)
+        return;
+      batchTimer = null;
+      if (e.body && "running" in e.body) {
+        await finishBatch(targets, e.body);
+        refreshStatusNote();
+        return;
+      }
+      setBatchBusy(false);
+      for (const t of targets) {
+        setBusy(t.session, false);
+        resetHint(t.session);
+      }
+      syncBatchBar();
+      refreshStatusNote();
+      showBatchErr(e.message);
+      return;
+    }
+    if (!batchJobId)
+      return;
+    if (j.running) {
+      batchElapsed = Math.round((j.ms || 0) / 1000) + "s";
+      setBatchBusy(true, "Applying " + targets.length + " edits with " + j.harness + "... " + batchElapsed);
+      refreshStatusNote();
+      batchTimer = setTimeout(() => tickBatch(targets), 600);
+      return;
+    }
+    batchTimer = null;
+    await finishBatch(targets, j);
+    refreshStatusNote();
+  }
+  async function finishBatch(targets, j) {
+    const currentTargets = targets;
+    batchJobId = null;
+    batchElapsed = "";
+    activeBatchTargets = null;
+    setBatchBusy(false);
+    if (j.error) {
+      for (const t of currentTargets) {
+        setBusy(t.session, false);
+        resetHint(t.session);
+      }
+      syncBatchBar();
+      showBatchErr((j.harness || "agent") + ": " + j.error, [
+        ["stderr", (j.stderr || "").trim()],
+        ["stdout", (j.stdout || j.log || "").trim()]
+      ]);
+      if (j.changed?.length)
+        reloadWorkspace(null);
+      return;
+    }
+    for (const t of currentTargets) {
+      sessions.delete(t.session.id);
+      t.session.el.remove();
+    }
+    syncBoxVisibility();
+    syncAgentTargets();
+    const changed = j.changed || [];
+    if (!changed.length && j.tracked !== false) {
+      showToast("✓", "Finished batch edit with no file changes");
+      return;
+    }
+    const focusTarget = currentTargets[0]?.session?.target;
+    if (!await reloadWorkspace(focusTarget, "Batch edited"))
+      return;
+    showToast("✓", !changed.length ? "Reloaded workspace" : changed.length === 1 ? "Updated " + changed[0] + " (" + currentTargets.length + " edits)" : "Updated " + changed.length + " files across " + currentTargets.length + " edits");
+  }
+  async function cancelBatch() {
+    if (!batchTimer && !batchJobId)
+      return;
+    if (batchTimer) {
+      clearTimeout(batchTimer);
+      batchTimer = null;
+    }
+    const id = batchJobId;
+    batchJobId = null;
+    batchElapsed = "";
+    setBatchBusy(false);
+    if (activeBatchTargets) {
+      for (const t of activeBatchTargets) {
+        setBusy(t.session, false);
+        resetHint(t.session);
+      }
+    }
+    activeBatchTargets = null;
+    syncBatchBar();
+    refreshStatusNote();
+    showToast("!", "Cancelled batch edit");
+    if (id) {
+      try {
+        await apiPost("/api/agent/cancel", { id });
+      } catch {}
+    }
+  }
+  function clearAllEdits() {
+    if (batchJobId)
+      cancelBatch();
+    for (const s of [...sessions.values()]) {
+      closeAgentEdit(s);
+    }
+  }
+  function refreshStatusNote() {
+    const busySessions = [...sessions.values()].filter((s) => s.timer || s.jobId);
+    const batchCount = batchJobId ? activeBatchTargets?.length || 0 : 0;
+    const individualBusy = busySessions.filter((s) => !activeBatchTargets?.some((t) => t.session === s));
+    if (batchJobId && individualBusy.length > 0) {
+      setStatusNote("Batch editing " + batchCount + " items + " + individualBusy.length + " edit running... " + (batchElapsed || ""));
+    } else if (batchJobId) {
+      setStatusNote("Batch editing " + batchCount + " items with " + chosen() + "... " + (batchElapsed || ""));
+    } else if (!individualBusy.length) {
+      setStatusNote("");
+    } else if (individualBusy.length === 1) {
+      const s = individualBusy[0];
+      setStatusNote("Editing with " + (s.harness || chosen()) + "... " + (s.elapsed || ""));
+    } else {
+      setStatusNote(individualBusy.length + " edits running...");
+    }
+  }
+  async function finish(session, j) {
+    const editTarget = session.target;
+    if (j.error) {
+      setBusy(session, false);
+      resetHint(session);
+      showErr(session, (j.harness || "agent") + ": " + j.error, [
+        ["stderr", (j.stderr || "").trim()],
+        ["stdout", (j.stdout || j.log || "").trim()]
+      ]);
+      if (j.changed?.length)
+        reloadWorkspace(null);
+      return;
+    }
+    sessions.delete(session.id);
+    session.el.remove();
+    syncBoxVisibility();
+    syncAgentTargets();
+    const changed = j.changed || [];
+    if (!changed.length && j.tracked !== false) {
+      showToast("✓", "Finished with no file changes");
+      return;
+    }
+    if (!await reloadWorkspace(editTarget, "Edited"))
+      return;
+    showToast("✓", !changed.length ? "Reloaded the workspace" : changed.length === 1 ? "Updated " + changed[0] : "Updated " + changed.length + " files");
+  }
+  var reloadChain = Promise.resolve();
+  function reloadWorkspace(focus, what = "Changed") {
+    const run = async () => {
+      try {
+        await api("/api/reindex");
+        await reloadOpenTabs();
+        if (focus?.path) {
+          await openFile(focus.path, { line: focus.l1, push: false });
+        }
+        await refreshTree();
+      } catch (e) {
+        showToast("!", what + ", but the reload failed: " + e.message);
+        return false;
+      }
+      return true;
+    };
+    const result = reloadChain.then(run, run);
+    reloadChain = result.then(() => {}, () => {});
+    return result;
+  }
+  function initAgent() {
+    if (!box || !tpl)
+      return;
+    setAgentHandler(openAgentEdit);
+    if (batchApply)
+      batchApply.addEventListener("click", () => submitBatch());
+    if (batchCancel)
+      batchCancel.addEventListener("click", () => cancelBatch());
+    if (batchClear)
+      batchClear.addEventListener("click", () => clearAllEdits());
+    if (batchHarness) {
+      batchHarness.addEventListener("change", async () => {
+        const hName = batchHarness.value;
+        if (!hName)
+          return;
+        await select(hName, (msg) => showBatchErr(msg));
+      });
+    }
+    if (batchModel) {
+      batchModel.addEventListener("change", async () => {
+        const hName = batchHarness?.value || chosen();
+        const mName = batchModel.value;
+        await select(hName, mName, (msg) => showBatchErr(msg));
+      });
+    }
+    document.addEventListener("click", (e) => {
+      const row = e.target.closest(".row.agent-sel, .row.agent-anchor, .diff-row.agent-sel, .diff-row.agent-anchor, .diff-side.agent-sel, .diff-side.agent-anchor");
       if (!row)
         return;
-      const d = doc_();
+      const line = +row.dataset.l;
+      const d = S2.docs[S2.active];
       if (!d)
         return;
-      const targetLine = +row.dataset.l;
-      const p = colAtPoint(e.clientX, e.clientY);
-      const targetCol = p && p.line === targetLine ? p.col : 0;
-      if (e.shiftKey) {
-        ensureAnchor(d);
-        d.cur = targetLine;
-        d.col = targetCol;
-        placeCaret();
-        updateStatus();
-        updateDomSelection();
-        for (const r of rowsEl.children)
-          r.classList.toggle("cur", +r.dataset.l === d.cur);
+      for (const s of sessions.values()) {
+        if (s.target.path === d.path && line >= s.target.l1 && line <= s.target.l2) {
+          s.input.focus();
+          s.el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          break;
+        }
+      }
+    });
+    addEventListener("beforeunload", (e) => {
+      if (!anyInFlight())
+        return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
+  }
+
+  // web/src/tree.js
+  var treeEl = $("#tree");
+  var openDirs = new Set;
+  var GIT_STATUS = {
+    M: ["git-M", "modified"],
+    A: ["git-A", "added"],
+    D: ["git-D", "deleted"],
+    U: ["git-untracked", "untracked"],
+    R: ["git-R", "renamed"],
+    C: ["git-A", "copied"],
+    "!": ["git-M", "unmerged"]
+  };
+  async function drawTree(dir, container, depth) {
+    let j;
+    try {
+      j = await api("/api/tree", { dir });
+    } catch {
+      return;
+    }
+    container.innerHTML = j.children.map((c) => {
+      const pad = 8 + depth * 12;
+      const ig = c.ignored ? " ignored" : "";
+      const note = c.ignored ? " (ignored by .gitignore, not searched)" : "";
+      if (c.dir) {
+        const dc = c.dirty ? " dirty" : "";
+        return '<div class="tw"><div class="tr dir' + ig + dc + '" data-dir="' + esc2(c.path) + '" style="padding-left:' + pad + 'px" title="Folder: ' + esc2(c.path) + note + '">' + '<span class="ar"></span><span class="nm">' + esc2(c.name) + "</span></div>" + '<div class="kids" data-kids="' + esc2(c.path) + '"></div></div>';
+      }
+      const g = GIT_STATUS[c.status];
+      const gc = g ? " dirty " + g[0] : "";
+      const badge = g ? '<span class="gs" title="git: ' + g[1] + '">' + esc2(c.status) + "</span>" : "";
+      return '<div class="tr file' + ig + gc + '" data-file="' + esc2(c.path) + '" style="padding-left:' + (pad + 12) + 'px" title="Open ' + esc2(c.path) + note + '">' + '<span class="ic" data-t="' + fileKind(c.name) + '"></span><span class="nm">' + esc2(c.name) + "</span>" + badge + "</div>";
+    }).join("");
+  }
+  var FILE_KIND = {
+    go: "code",
+    js: "code",
+    mjs: "code",
+    cjs: "code",
+    ts: "code",
+    tsx: "code",
+    jsx: "code",
+    py: "code",
+    rb: "code",
+    rs: "code",
+    java: "code",
+    kt: "code",
+    c: "code",
+    h: "code",
+    cc: "code",
+    cpp: "code",
+    hpp: "code",
+    cs: "code",
+    php: "code",
+    swift: "code",
+    lua: "code",
+    ex: "code",
+    exs: "code",
+    scala: "code",
+    dart: "code",
+    sh: "code",
+    bash: "code",
+    zsh: "code",
+    sql: "code",
+    json: "data",
+    yaml: "data",
+    yml: "data",
+    toml: "data",
+    ini: "data",
+    xml: "data",
+    csv: "data",
+    env: "data",
+    lock: "data",
+    mod: "data",
+    sum: "data",
+    md: "doc",
+    markdown: "doc",
+    txt: "doc",
+    rst: "doc",
+    adoc: "doc",
+    html: "web",
+    htm: "web",
+    css: "web",
+    scss: "web",
+    less: "web",
+    svg: "web",
+    vue: "web",
+    png: "img",
+    jpg: "img",
+    jpeg: "img",
+    gif: "img",
+    webp: "img",
+    ico: "img",
+    avif: "img"
+  };
+  function fileKind(name) {
+    const i = name.lastIndexOf(".");
+    return i > 0 && FILE_KIND[name.slice(i + 1).toLowerCase()] || "other";
+  }
+  async function refreshTree() {
+    await drawTree("", treeEl, 0);
+    const dirs = Array.from(openDirs).sort((a, b) => a.split("/").length - b.split("/").length);
+    for (const path of dirs) {
+      const dirRow = treeEl.querySelector('[data-dir="' + CSS.escape(path) + '"]');
+      const kids = treeEl.querySelector('[data-kids="' + CSS.escape(path) + '"]');
+      if (kids && dirRow) {
+        dirRow.classList.add("open");
+        kids.classList.add("open");
+        kids.dataset.loaded = "1";
+        await drawTree(path, kids, path.split("/").length);
+      } else {
+        openDirs.delete(path);
+      }
+    }
+  }
+  function restoreOpenDirs(dirs) {
+    if (Array.isArray(dirs)) {
+      for (const d of dirs) {
+        if (typeof d === "string")
+          openDirs.add(d);
+      }
+    }
+  }
+  async function revealDir(dir) {
+    const parts = dir.split("/");
+    for (let i = 0;i < parts.length; i++) {
+      const p = parts.slice(0, i + 1).join("/");
+      const row = treeEl.querySelector('[data-dir="' + CSS.escape(p) + '"]');
+      if (!row)
+        break;
+      if (!row.classList.contains("open")) {
+        row.classList.add("open");
+        const kids = treeEl.querySelector('[data-kids="' + CSS.escape(p) + '"]');
+        if (kids) {
+          kids.classList.add("open");
+          openDirs.add(p);
+          kids.dataset.loaded = "1";
+          await drawTree(p, kids, p.split("/").length);
+        }
+      }
+    }
+    const last = treeEl.querySelector('[data-dir="' + CSS.escape(dir) + '"]');
+    if (last)
+      last.scrollIntoView({ block: "center" });
+    try {
+      sessionStorage.setItem("px0.openDirs", JSON.stringify(Array.from(openDirs)));
+    } catch {}
+  }
+  async function revealFile(path) {
+    const idx = path.lastIndexOf("/");
+    if (idx > 0)
+      await revealDir(path.slice(0, idx));
+    const row = treeEl.querySelector('[data-file="' + CSS.escape(path) + '"]');
+    if (row) {
+      $$(".tr.sel", treeEl).forEach((x) => x.classList.remove("sel"));
+      row.classList.add("sel");
+      row.scrollIntoView({ block: "center" });
+    }
+  }
+  var treeMenu = $("#tree-menu");
+  var menuTarget = null;
+  function closeTreeMenu() {
+    if (treeMenu && !treeMenu.hidden)
+      treeMenu.hidden = true;
+    menuTarget = null;
+  }
+  function openTreeMenu(row, x, y) {
+    if (!treeMenu)
+      return;
+    menuTarget = row;
+    treeMenu.replaceChildren();
+    const btn = document.createElement("button");
+    btn.className = "sel-menu-item";
+    btn.setAttribute("role", "menuitem");
+    btn.textContent = "Rename";
+    btn.addEventListener("click", () => {
+      closeTreeMenu();
+      startRename(row);
+    });
+    treeMenu.append(btn);
+    treeMenu.hidden = false;
+    const { offsetWidth: w, offsetHeight: h } = treeMenu;
+    treeMenu.style.left = Math.max(4, x + w > innerWidth - 4 ? x - w : x) + "px";
+    treeMenu.style.top = Math.max(4, y + h > innerHeight - 4 ? y - h : y) + "px";
+  }
+  function rowPath(row) {
+    return row.dataset.file ?? row.dataset.dir;
+  }
+  function startRename(row) {
+    const path = rowPath(row);
+    if (!path)
+      return;
+    const nameEl = row.querySelector(".nm");
+    if (!nameEl)
+      return;
+    const oldName = nameEl.textContent;
+    const input = document.createElement("input");
+    input.className = "tr-rename-input";
+    input.setAttribute("aria-label", "Rename " + path);
+    input.value = oldName;
+    nameEl.replaceWith(input);
+    input.focus();
+    input.setSelectionRange(0, input.value.lastIndexOf(".") > 0 ? input.value.lastIndexOf(".") : input.value.length);
+    let done = false;
+    const finish = async (commit) => {
+      if (done)
+        return;
+      done = true;
+      const newName = input.value.trim();
+      if (!commit || !newName || newName === oldName) {
+        input.replaceWith(nameEl);
         return;
       }
-      d.selAnchor = null;
-      d.cur = targetLine;
-      d.col = targetCol;
-      placeCaret();
-      updateStatus();
-      const w = wordAtPoint(e.clientX, e.clientY);
-      S2.at = w;
-      if (w)
-        S2.lastWord = w.word;
-      if (e[MOD] && w) {
+      const slash = path.lastIndexOf("/");
+      const newPath = (slash < 0 ? "" : path.slice(0, slash + 1)) + newName;
+      try {
+        await apiPostJson("/api/file/rename", { path, newPath });
+        const t = S2.tabs.find((t) => t.path === path);
+        if (t) {
+          t.path = newPath;
+          t.name = newName;
+        }
+        showToast("✓", "Renamed");
+        await reloadWorkspace();
+      } catch (e) {
+        showToast("!", "Rename failed: " + e.message);
+        nameEl.textContent = oldName;
+        input.replaceWith(nameEl);
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
         e.preventDefault();
-        S2.at = w;
-        S2.lastWord = w.word;
-        pushHistory(d.path, d.cur);
-        gotoDefinition(w);
+        finish(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      }
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("click", (e) => e.stopPropagation());
+  }
+  function initTree() {
+    $("#btn-changed")?.addEventListener("click", (e) => {
+      const on = treeEl.classList.toggle("changed-only");
+      e.currentTarget.classList.toggle("active", on);
+    });
+    treeEl.addEventListener("click", async (e) => {
+      const dirRow = e.target.closest("[data-dir]");
+      if (dirRow) {
+        const path = dirRow.dataset.dir;
+        const kids = treeEl.querySelector('[data-kids="' + CSS.escape(path) + '"]');
+        const open = dirRow.classList.toggle("open");
+        kids.classList.toggle("open", open);
+        if (open) {
+          openDirs.add(path);
+          kids.dataset.loaded = "1";
+          await drawTree(path, kids, path.split("/").length);
+        } else
+          openDirs.delete(path);
+        try {
+          sessionStorage.setItem("px0.openDirs", JSON.stringify(Array.from(openDirs)));
+        } catch {}
         return;
       }
-      for (const r of rowsEl.children)
-        r.classList.toggle("cur", +r.dataset.l === d.cur);
-    });
-    vp.addEventListener("dblclick", (e) => {
-      const w = wordAtPoint(e.clientX, e.clientY);
-      if (w) {
-        S2.at = w;
-        S2.lastWord = w.word;
+      const f = e.target.closest("[data-file]");
+      if (f) {
+        $$(".tr.sel", treeEl).forEach((x) => x.classList.remove("sel"));
+        f.classList.add("sel");
+        openFile(f.dataset.file);
       }
-      S2.occ = w && w.word.length > 1 ? w.word : null;
-      paint();
     });
+    treeEl.addEventListener("contextmenu", (e) => {
+      const row = e.target.closest(".tr");
+      if (!row)
+        return;
+      e.preventDefault();
+      openTreeMenu(row, e.clientX, e.clientY);
+    });
+    if (treeMenu) {
+      treeMenu.addEventListener("mousedown", (e) => e.preventDefault());
+      document.addEventListener("mousedown", (e) => {
+        if (!treeMenu.hidden && !e.target.closest("#tree-menu"))
+          closeTreeMenu();
+      });
+      addEventListener("keydown", (e) => {
+        if (e.key === "Escape")
+          closeTreeMenu();
+      });
+    }
+  }
+
+  // web/src/panels.js
+  function showPanel(name) {
+    document.body.classList.remove("side-hidden");
+    layout();
+    render();
+  }
+  async function reindexWorkspace() {
+    try {
+      const j = await api("/api/reindex");
+      S2.meta.files = j.files;
+      S2.meta.indexMs = j.indexMs;
+      await refreshTree();
+      await reloadOpenTabs();
+      updateStatus();
+      showToast("✓", "Workspace refreshed");
+    } catch (e) {
+      showToast("!", "Refresh failed: " + e.message);
+    }
+  }
+  function initPanels() {
+    $("#btn-reindex").addEventListener("click", reindexWorkspace);
+    (() => {
+      const rz = $("#resizer");
+      let dragging = false;
+      rz.addEventListener("mousedown", (e) => {
+        dragging = true;
+        rz.classList.add("drag");
+        e.preventDefault();
+      });
+      addEventListener("mousemove", (e) => {
+        if (!dragging)
+          return;
+        $("#side").style.width = Math.max(170, Math.min(620, e.clientX)) + "px";
+      });
+      addEventListener("mouseup", () => {
+        if (dragging) {
+          dragging = false;
+          rz.classList.remove("drag");
+          layout();
+          render();
+        }
+      });
+    })();
   }
 
   // web/src/lspsetup.js
@@ -2234,6 +2952,829 @@
     });
   }
 
+  // web/src/find.js
+  var findbar = $("#findbar");
+  var findInput = $("#find-input");
+  function editorSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount)
+      return "";
+    const at = sel.getRangeAt(0).commonAncestorContainer;
+    if (!vp.contains(at) && !mdview.contains(at))
+      return "";
+    const line = sel.toString().split(/\r?\n/).find((l) => l.trim());
+    return line ? line.trim() : "";
+  }
+  function openFind(seed) {
+    if (!doc_())
+      return;
+    const sel = editorSelection();
+    if (sel)
+      findInput.value = sel;
+    else if (findbar.hidden && seed)
+      findInput.value = seed;
+    findbar.hidden = false;
+    findInput.focus();
+    findInput.select();
+    if (findInput.value)
+      runFind();
+  }
+  function clearFind() {
+    findbar.hidden = true;
+    S2.find = null;
+    $("#find-count").textContent = "0";
+    $("#minimap-hits").innerHTML = "";
+    clearPreviewMarks();
+    paint();
+  }
+  var runFind = debounce(async () => {
+    const d = doc_();
+    if (!d)
+      return;
+    const q = findInput.value;
+    if (previewing(d)) {
+      const n = findInPreview(q);
+      S2.find = q ? { q, ci: false, hits: new Array(n).fill(null), byLine: new Set, active: n ? 0 : -1, preview: true } : null;
+      $("#find-count").textContent = !q ? "0" : n ? "1 / " + n : "no results";
+      $("#minimap-hits").innerHTML = previewHitOffsets().map((p) => '<i style="top:' + p + '%"></i>').join("");
+      if (n)
+        jumpToHit(0);
+      return;
+    }
+    if (!q) {
+      S2.find = null;
+      $("#find-count").textContent = "0";
+      $("#minimap-hits").innerHTML = "";
+      paint();
+      return;
+    }
+    let j;
+    try {
+      j = await api("/api/search", { q, glob: d.path });
+    } catch {
+      return;
+    }
+    const f = (j.results || []).find((r) => r.path === d.path);
+    const hits = [];
+    if (f) {
+      let prevLine = -1, n = 0;
+      for (const m of f.matches) {
+        n = m.line === prevLine ? n + 1 : 0;
+        prevLine = m.line;
+        hits.push({ line: m.line, n });
+      }
+    }
+    S2.find = { q, ci: false, hits, byLine: new Set(hits.map((h) => h.line)), active: hits.length ? 0 : -1 };
+    $("#find-count").textContent = hits.length ? "1 / " + hits.length : "no results";
+    drawMinimap(hits, d.total);
+    if (hits.length)
+      jumpToHit(0);
+    else
+      paint();
+  }, 140);
+  function drawMinimap(hits, total) {
+    const mm = $("#minimap-hits");
+    if (!hits.length) {
+      mm.innerHTML = "";
+      return;
+    }
+    const seen = new Set;
+    mm.innerHTML = hits.filter((h) => !seen.has(h.line) && seen.add(h.line)).map((h) => '<i style="top:' + ((h.line - 1) / total * 100).toFixed(3) + '%"></i>').join("");
+  }
+  function jumpToHit(i) {
+    const d = doc_();
+    if (!d || !S2.find || !S2.find.hits.length)
+      return;
+    const n = S2.find.hits.length;
+    S2.find.active = (i % n + n) % n;
+    if (S2.find.preview) {
+      $("#find-count").textContent = S2.find.active + 1 + " / " + n;
+      showPreviewHit(S2.find.active);
+      return;
+    }
+    const h = S2.find.hits[S2.find.active];
+    d.cur = h.line;
+    const y = (h.line - 1) * LH;
+    if (y < vp.scrollTop + LH * 2 || y > vp.scrollTop + vp.clientHeight - LH * 3)
+      centerLine(h.line);
+    $("#find-count").textContent = S2.find.active + 1 + " / " + n;
+    render();
+    updateStatus();
+  }
+  function initFind() {
+    findInput.addEventListener("input", runFind);
+    findInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        jumpToHit(S2.find ? S2.find.active + (e.shiftKey ? -1 : 1) : 0);
+      }
+      if (e.key === "Escape") {
+        clearFind();
+        vp.focus();
+      }
+    });
+    $("#find-next").addEventListener("click", () => jumpToHit(S2.find ? S2.find.active + 1 : 0));
+    $("#find-prev").addEventListener("click", () => jumpToHit(S2.find ? S2.find.active - 1 : 0));
+    $("#find-close").addEventListener("click", clearFind);
+    $("#minimap-hits").addEventListener("click", (e) => {
+      const r = $("#minimap-hits").getBoundingClientRect();
+      const d = doc_();
+      if (!d)
+        return;
+      if (previewing(d)) {
+        scrollPreviewTo((e.clientY - r.top) / r.height);
+        return;
+      }
+      centerLine(Math.round((e.clientY - r.top) / r.height * d.total));
+      render();
+    });
+  }
+
+  // web/src/imageview.js
+  var ivInit = false;
+  var isPanning = false;
+  var panStart = { x: 0, y: 0 };
+  var panOrigin = { x: 0, y: 0 };
+  function isImageViewing(d = doc_()) {
+    return !!(d && d.isImage);
+  }
+  function syncImageView() {
+    const d = doc_();
+    const imgView = $("#imgview");
+    if (!imgView)
+      return;
+    if (isImageViewing(d)) {
+      $("#empty").hidden = true;
+      imgView.hidden = false;
+      renderImageView(d);
+    } else {
+      imgView.hidden = true;
+    }
+  }
+  function renderImageView(d) {
+    if (!ivInit)
+      initImageViewer();
+    const img = $("#imgview-img");
+    const canvas = $("#imgview-canvas");
+    if (!img || !canvas)
+      return;
+    const rawUrl = "/api/raw?path=" + encodeURIComponent(d.path);
+    if (img.dataset.curPath !== d.path) {
+      img.dataset.curPath = d.path;
+      img.src = rawUrl;
+    }
+    if (d.imageFit === undefined)
+      d.imageFit = true;
+    if (d.imageScale === undefined)
+      d.imageScale = 1;
+    if (d.imagePanX === undefined)
+      d.imagePanX = 0;
+    if (d.imagePanY === undefined)
+      d.imagePanY = 0;
+    if (d.imageBg === undefined)
+      d.imageBg = "checker";
+    if (d.imagePixelated === undefined) {
+      d.imagePixelated = d.imageMeta ? d.imageMeta.width <= 64 && d.imageMeta.height <= 64 : false;
+    }
+    const onLoaded = () => {
+      d.imageMeta = {
+        width: img.naturalWidth,
+        height: img.naturalHeight
+      };
+      if (d.imagePixelated === undefined) {
+        d.imagePixelated = d.imageMeta.width <= 64 && d.imageMeta.height <= 64;
+      }
+      applyImageTransform(d);
+    };
+    if (img.complete && img.naturalWidth > 0) {
+      onLoaded();
+    } else {
+      img.onload = onLoaded;
+    }
+    applyImageTransform(d);
+  }
+  function applyImageTransform(d = doc_()) {
+    if (!d || !d.isImage)
+      return;
+    const canvas = $("#imgview-canvas");
+    const img = $("#imgview-img");
+    const vp = $("#imgview-viewport");
+    if (!canvas || !img || !vp)
+      return;
+    const natW = d.imageMeta?.width || img.naturalWidth || 100;
+    const natH = d.imageMeta?.height || img.naturalHeight || 100;
+    let currentScale = d.imageScale || 1;
+    if (d.imageFit) {
+      const vpW = Math.max(100, vp.clientWidth - 64);
+      const vpH = Math.max(100, vp.clientHeight - 64);
+      const fitScale = Math.min(vpW / natW, vpH / natH);
+      currentScale = natW <= vpW && natH <= vpH ? 1 : fitScale;
+      d.imageScale = currentScale;
+      d.imagePanX = 0;
+      d.imagePanY = 0;
+    }
+    canvas.style.transform = `translate(${d.imagePanX || 0}px, ${d.imagePanY || 0}px) scale(${currentScale})`;
+    canvas.className = "bg-" + (d.imageBg || "checker");
+    img.classList.toggle("render-pixelated", !!d.imagePixelated);
+    img.classList.toggle("render-smooth", !d.imagePixelated);
+    const zoomLabel = $("#iv-zoom-label");
+    if (zoomLabel) {
+      zoomLabel.textContent = d.imageFit ? `Fit (${Math.round(currentScale * 100)}%)` : `${Math.round(currentScale * 100)}%`;
+    }
+    const bgBtn = $("#iv-bg");
+    if (bgBtn) {
+      bgBtn.textContent = d.imageBg === "dark" ? "Dark" : d.imageBg === "light" ? "Light" : "Checker";
+    }
+    const pixelBtn = $("#iv-pixel");
+    if (pixelBtn) {
+      pixelBtn.textContent = d.imagePixelated ? "Pixelated" : "Smooth";
+      pixelBtn.classList.toggle("active", !!d.imagePixelated);
+    }
+    const metaEl = $("#iv-meta");
+    if (metaEl) {
+      metaEl.textContent = `${natW} × ${natH} px · ${fmtBytes(d.size || 0)}`;
+    }
+    updateStatus();
+  }
+  function zoomImage(delta, factor = 1.25) {
+    const d = doc_();
+    if (!d || !d.isImage)
+      return;
+    d.imageFit = false;
+    if (delta > 0) {
+      d.imageScale = Math.min(32, (d.imageScale || 1) * factor);
+    } else {
+      d.imageScale = Math.max(0.05, (d.imageScale || 1) / factor);
+    }
+    applyImageTransform(d);
+  }
+  function fitImage() {
+    const d = doc_();
+    if (!d || !d.isImage)
+      return;
+    d.imageFit = true;
+    d.imagePanX = 0;
+    d.imagePanY = 0;
+    applyImageTransform(d);
+  }
+  function actualSizeImage() {
+    const d = doc_();
+    if (!d || !d.isImage)
+      return;
+    d.imageFit = false;
+    d.imageScale = 1;
+    d.imagePanX = 0;
+    d.imagePanY = 0;
+    applyImageTransform(d);
+  }
+  function cycleImageBg() {
+    const d = doc_();
+    if (!d || !d.isImage)
+      return;
+    const modes = ["checker", "dark", "light"];
+    const curIdx = modes.indexOf(d.imageBg || "checker");
+    d.imageBg = modes[(curIdx + 1) % modes.length];
+    applyImageTransform(d);
+  }
+  function toggleImagePixelated() {
+    const d = doc_();
+    if (!d || !d.isImage)
+      return;
+    d.imagePixelated = !d.imagePixelated;
+    applyImageTransform(d);
+  }
+  function panImage(dx, dy) {
+    const d = doc_();
+    if (!d || !d.isImage)
+      return;
+    d.imageFit = false;
+    d.imagePanX = (d.imagePanX || 0) + dx;
+    d.imagePanY = (d.imagePanY || 0) + dy;
+    applyImageTransform(d);
+  }
+  function handleImageKey(e) {
+    const d = doc_();
+    if (!d || !d.isImage)
+      return false;
+    if (e.key === "+" || e.key === "=") {
+      zoomImage(1);
+      return true;
+    }
+    if (e.key === "-" || e.key === "_") {
+      zoomImage(-1);
+      return true;
+    }
+    if (e.key === "0") {
+      fitImage();
+      return true;
+    }
+    if (e.key === "1") {
+      actualSizeImage();
+      return true;
+    }
+    if (e.key === "b" || e.key === "B") {
+      cycleImageBg();
+      return true;
+    }
+    if (e.key === "p" || e.key === "P") {
+      toggleImagePixelated();
+      return true;
+    }
+    if (e.key === "ArrowUp") {
+      panImage(0, 40);
+      return true;
+    }
+    if (e.key === "ArrowDown") {
+      panImage(0, -40);
+      return true;
+    }
+    if (e.key === "ArrowLeft") {
+      panImage(40, 0);
+      return true;
+    }
+    if (e.key === "ArrowRight") {
+      panImage(-40, 0);
+      return true;
+    }
+    return false;
+  }
+  function initImageViewer() {
+    if (ivInit)
+      return;
+    ivInit = true;
+    const vp = $("#imgview-viewport");
+    const hud = $("#imgview-hud");
+    if (!vp)
+      return;
+    $("#iv-zoom-in")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      zoomImage(1);
+    });
+    $("#iv-zoom-out")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      zoomImage(-1);
+    });
+    $("#iv-zoom-label")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const d = doc_();
+      if (d?.imageFit)
+        actualSizeImage();
+      else
+        fitImage();
+    });
+    $("#iv-fit")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      fitImage();
+    });
+    $("#iv-100")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      actualSizeImage();
+    });
+    $("#iv-bg")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cycleImageBg();
+    });
+    $("#iv-pixel")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleImagePixelated();
+    });
+    vp.addEventListener("mousedown", (e) => {
+      if (e.target.closest("#imgview-hud") || e.button !== 0)
+        return;
+      const d = doc_();
+      if (!d || !d.isImage)
+        return;
+      isPanning = true;
+      panStart = { x: e.clientX, y: e.clientY };
+      panOrigin = { x: d.imagePanX || 0, y: d.imagePanY || 0 };
+      vp.classList.add("panning");
+      e.preventDefault();
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!isPanning)
+        return;
+      const d = doc_();
+      if (!d || !d.isImage)
+        return;
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        d.imageFit = false;
+      }
+      d.imagePanX = panOrigin.x + dx;
+      d.imagePanY = panOrigin.y + dy;
+      applyImageTransform(d);
+    });
+    window.addEventListener("mouseup", () => {
+      if (!isPanning)
+        return;
+      isPanning = false;
+      vp.classList.remove("panning");
+    });
+    vp.addEventListener("wheel", (e) => {
+      const d = doc_();
+      if (!d || !d.isImage)
+        return;
+      e.preventDefault();
+      const factor = e.ctrlKey || e.metaKey ? 1.15 : Math.abs(e.deltaY) > 50 ? 1.25 : 1.1;
+      if (e.deltaY < 0) {
+        zoomImage(1, factor);
+      } else {
+        zoomImage(-1, factor);
+      }
+    }, { passive: false });
+    window.addEventListener("resize", () => {
+      const d = doc_();
+      if (d?.isImage && d.imageFit) {
+        applyImageTransform(d);
+      }
+    });
+  }
+
+  // web/src/tabs.js
+  var closedTabs = [];
+  var MAX_CLOSED = 20;
+  async function openFile(path, opts = {}) {
+    const { line, push = true, col } = opts;
+    let idx = S2.tabs.findIndex((t) => t.path === path);
+    if (idx < 0) {
+      let j;
+      const start = line ? Math.max(0, Math.floor((line - 1) / CHUNK) * CHUNK) : 0;
+      try {
+        j = await api("/api/file", { path, start, count: CHUNK });
+      } catch (e) {
+        setStatusNote(path + ": " + e.message, 4000);
+        return;
+      }
+      const isImg = !!j.image;
+      const hasDiff = !isImg && !!j.diffAvailable;
+      const d = {
+        path,
+        name: path.split("/").pop(),
+        lang: isImg ? "image" : j.lang,
+        total: isImg ? 0 : j.total,
+        maxCols: isImg ? 0 : j.maxCols,
+        size: j.size,
+        mtime: j.mtime,
+        lines: isImg ? [] : new Array(j.total),
+        chunks: new Set(isImg ? [] : [start / CHUNK]),
+        pending: new Set,
+        refining: new Set,
+        scrollTop: 0,
+        cur: line || 1,
+        outline: null,
+        gen: 0,
+        markdown: !isImg && !!j.markdown,
+        isImage: isImg,
+        gutter: null,
+        diffMode: hasDiff ? layoutPref() || "split" : null,
+        diffAvailable: hasDiff,
+        diffDismissed: false
+      };
+      if (!isImg) {
+        for (let i = 0;i < j.lines.length; i++)
+          d.lines[j.start + i] = j.lines[i];
+      }
+      d.lsp = !isImg && j.lsp || { state: "off", server: "" };
+      S2.tabs.push(d);
+      idx = S2.tabs.length - 1;
+      if (!isImg && j.refine)
+        refineChunk(d, start / CHUNK);
+      if (!isImg)
+        loadGutter(d);
+    }
+    const prev = doc_();
+    if (prev && prev !== S2.tabs[idx])
+      prev.scrollTop = vp.scrollTop;
+    if (prev !== S2.tabs[idx]) {
+      clearSelectAll();
+      clearFind();
+    }
+    S2.active = idx;
+    const d = S2.tabs[idx];
+    $("#empty").hidden = true;
+    syncImageView();
+    syncPreview();
+    syncDiffView();
+    if (!S2.at || S2.at.path !== d.path)
+      S2.at = null;
+    S2.lsp.state = d.lsp && d.lsp.state || "off";
+    S2.lsp.server = d.lsp && d.lsp.server || "";
+    S2.lsp.missing = d.lsp && d.lsp.missing || "";
+    warmLSP(d);
+    drawTabs();
+    drawCrumbs();
+    layout();
+    if (line) {
+      d.cur = line;
+      centerLine(line);
+    } else
+      vp.scrollTop = d.scrollTop;
+    render();
+    updateStatus();
+    if ($("#panel-outline")?.classList.contains("active"))
+      loadOutline();
+    if (push)
+      pushHistory(path, line || d.cur, col);
+    saveWorkspaceState();
+  }
+  async function loadGutter(d) {
+    if (!S2.meta?.git)
+      return;
+    try {
+      const j = await api("/api/gutter", { path: d.path });
+      d.diffAvailable = !!j.available;
+      if (j.available && d.diffMode === null && !d.diffDismissed) {
+        d.diffMode = layoutPref() || "split";
+        if (doc_() === d) {
+          syncDiffView();
+          syncPreview();
+        }
+      }
+      if (!j.available) {
+        d.gutter = null;
+      } else {
+        const marks = new Map;
+        for (const n of j.modified)
+          marks.set(n, "mod");
+        for (const n of j.added)
+          marks.set(n, "add");
+        d.gutter = { marks, dels: new Set(j.deleted) };
+      }
+      if (doc_() === d) {
+        updateStatus();
+        render();
+      }
+      drawTabs();
+    } catch {}
+  }
+  async function reloadOpenTabs() {
+    if (S2.tabs.length === 0)
+      return;
+    const activeDoc = doc_();
+    if (activeDoc) {
+      activeDoc.scrollTop = vp.scrollTop;
+      if (previewing(activeDoc)) {
+        const mv = $("#mdview");
+        if (mv)
+          activeDoc.mdScroll = mv.scrollTop;
+      }
+    }
+    const targets = S2.tabs.map((t) => ({
+      oldDoc: t,
+      path: t.path,
+      anchor: t.cur || 1,
+      start: t.cur ? Math.max(0, Math.floor((t.cur - 1) / CHUNK) * CHUNK) : 0
+    }));
+    const results = await Promise.allSettled(targets.map((tgt) => api("/api/file", { path: tgt.path, start: tgt.start, count: CHUNK })));
+    for (let i = 0;i < targets.length; i++) {
+      const res = results[i];
+      const tgt = targets[i];
+      const idx = S2.tabs.indexOf(tgt.oldDoc);
+      if (idx < 0)
+        continue;
+      if (tgt.oldDoc.buf?.dirty)
+        continue;
+      if (res.status !== "fulfilled") {
+        if (idx === S2.active) {
+          setStatusNote(tgt.path + ": " + (res.reason?.message || "failed to load"), 4000);
+        }
+        continue;
+      }
+      const j = res.value;
+      if (j.image) {
+        tgt.oldDoc.size = j.size;
+        continue;
+      }
+      const keep = tgt.oldDoc;
+      const hasDiff = !!j.diffAvailable;
+      const newCur = Math.max(1, Math.min(keep.cur || 1, j.total));
+      const diffMode = hasDiff ? keep.diffMode || null : null;
+      const d = {
+        path: tgt.path,
+        name: tgt.path.split("/").pop(),
+        lang: j.lang,
+        total: j.total,
+        maxCols: j.maxCols,
+        size: j.size,
+        lines: new Array(j.total),
+        mtime: j.mtime,
+        chunks: new Set([tgt.start / CHUNK]),
+        pending: new Set,
+        refining: new Set,
+        scrollTop: keep.scrollTop || 0,
+        cur: newCur,
+        col: keep.col || 0,
+        outline: null,
+        gen: 0,
+        markdown: !!j.markdown,
+        mdScroll: keep.mdScroll || 0,
+        gutter: null,
+        diffMode,
+        diffAvailable: hasDiff,
+        diffDismissed: !!keep.diffDismissed || !keep.diffMode,
+        diffScroll: keep === activeDoc && keep.diffMode ? diffScrollTop() : 0
+      };
+      for (let k = 0;k < j.lines.length; k++) {
+        d.lines[j.start + k] = j.lines[k];
+      }
+      d.lsp = j.lsp || { state: "off", server: "" };
+      S2.tabs[idx] = d;
+      if (j.refine)
+        refineChunk(d, tgt.start / CHUNK);
+    }
+    await Promise.allSettled(S2.tabs.filter((t) => !t.isImage).map((t) => loadGutter(t)));
+    const d = doc_();
+    if (d) {
+      S2.lsp.state = d.lsp && d.lsp.state || "off";
+      S2.lsp.server = d.lsp && d.lsp.server || "";
+      S2.lsp.missing = d.lsp && d.lsp.missing || "";
+      warmLSP(d);
+      syncImageView();
+      syncPreview();
+      syncDiffView(true);
+      layout();
+      vp.scrollTop = d.scrollTop;
+      render();
+      if ($("#panel-outline")?.classList.contains("active"))
+        loadOutline();
+    }
+    drawTabs();
+    drawCrumbs();
+    updateStatus();
+    saveWorkspaceState();
+  }
+  function centerLine(n) {
+    if (previewing()) {
+      previewLine(n);
+      return;
+    }
+    const y = (n - 1) * LH - Math.max(0, vp.clientHeight / 2 - LH * 2);
+    vp.scrollTop = Math.max(0, y);
+  }
+  function closeTab(i) {
+    const target = S2.tabs[i];
+    if (target?.buf?.dirty && !confirm("Discard unsaved changes to " + target.path + "?"))
+      return;
+    clearSelectAll();
+    const [closed] = S2.tabs.splice(i, 1);
+    if (closed) {
+      if (closed.path) {
+        const scrollTop = i === S2.active ? vp.scrollTop : closed.scrollTop;
+        closedTabs.push({ path: closed.path, cur: closed.cur, scrollTop });
+        if (closedTabs.length > MAX_CLOSED)
+          closedTabs.shift();
+        api("/api/close", { path: closed.path }).then(() => refreshMetrics()).catch(() => {});
+      }
+      closed.lines = null;
+      closed.chunks?.clear?.();
+      closed.pending?.clear?.();
+      closed.refining?.clear?.();
+      closed.outline = null;
+    }
+    if (S2.tabs.length === 0) {
+      S2.active = -1;
+      syncImageView();
+      syncPreview();
+      syncDiffView();
+      rowsEl.innerHTML = "";
+      sizer.style.height = "0px";
+      $("#empty").hidden = false;
+      drawCrumbs();
+      drawTabs();
+      updateStatus();
+      saveWorkspaceState();
+      return;
+    }
+    S2.active = Math.min(i, S2.tabs.length - 1);
+    const d = doc_();
+    syncImageView();
+    syncPreview();
+    syncDiffView();
+    drawTabs();
+    drawCrumbs();
+    layout();
+    vp.scrollTop = d.scrollTop;
+    render();
+    updateStatus();
+    saveWorkspaceState();
+  }
+  async function reopenClosedTab() {
+    while (closedTabs.length) {
+      const t = closedTabs.pop();
+      if (S2.tabs.some((d) => d.path === t.path))
+        continue;
+      await openFile(t.path, { line: t.cur });
+      if (doc_()?.path !== t.path)
+        return;
+      vp.scrollTop = t.scrollTop;
+      render();
+      updateStatus();
+      return;
+    }
+  }
+  function drawTabs() {
+    $("#tabs").innerHTML = S2.tabs.map((t, i) => '<div class="tab' + (i === S2.active ? " active" : "") + (t.isImage ? " tab-image" : "") + (t.diffAvailable ? " git-modified" : "") + '" data-i="' + i + '" title="' + esc2(t.path) + '">' + (t.isImage ? '<svg class="tab-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><circle cx="5.5" cy="5.5" r="1.5"/><path d="M14 10l-3.5-3.5L3 14"/></svg>' : "") + '<span class="tn">' + esc2(t.name) + "</span>" + (t.buf?.dirty ? '<span class="tab-dirty-dot" title="' + withKeys("Unsaved edit ({Mod+S} to save)") + '">●</span>' : "") + (t.diffAvailable ? '<span class="tab-git-dot" title="Modified in git">●</span>' : "") + '<span class="x" data-close="' + i + '" title="' + withKeys("Close tab ({Alt+W})") + '"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></span></div>').join("");
+    const act = $("#tabs .tab.active");
+    if (act)
+      act.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+  function switchTab(i) {
+    if (i === S2.active || !S2.tabs[i])
+      return;
+    clearLink();
+    const prev = doc_();
+    if (prev)
+      prev.scrollTop = vp.scrollTop;
+    S2.active = i;
+    syncImageView();
+    syncPreview();
+    syncDiffView();
+    clearFind();
+    clearSelectAll();
+    S2.at = null;
+    S2.lsp.state = S2.tabs[i].lsp && S2.tabs[i].lsp.state || "off";
+    S2.lsp.server = S2.tabs[i].lsp && S2.tabs[i].lsp.server || "";
+    S2.lsp.missing = S2.tabs[i].lsp && S2.tabs[i].lsp.missing || "";
+    warmLSP(S2.tabs[i]);
+    drawTabs();
+    drawCrumbs();
+    layout();
+    vp.scrollTop = S2.tabs[i].scrollTop;
+    render();
+    updateStatus();
+    if ($("#panel-outline")?.classList.contains("active"))
+      loadOutline();
+    pushHistory(S2.tabs[i].path, S2.tabs[i].cur);
+    saveWorkspaceState();
+  }
+  function saveWorkspaceState() {
+    try {
+      const tabs = S2.tabs.map((t) => ({ path: t.path, cur: t.cur }));
+      sessionStorage.setItem("px0.tabs", JSON.stringify({ tabs, active: S2.active }));
+    } catch {}
+  }
+  async function restoreWorkspaceTabs() {
+    try {
+      const saved = sessionStorage.getItem("px0.tabs");
+      if (!saved)
+        return false;
+      const { tabs, active } = JSON.parse(saved);
+      if (!Array.isArray(tabs) || tabs.length === 0)
+        return false;
+      for (const t of tabs) {
+        if (t.path)
+          await openFile(t.path, { line: t.cur, push: false });
+      }
+      if (typeof active === "number" && active >= 0 && active < S2.tabs.length) {
+        switchTab(active);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function drawCrumbs() {
+    const el = $("#crumbs");
+    if (el)
+      el.innerHTML = "";
+  }
+  function initTabs() {
+    $("#tabs").addEventListener("click", (e) => {
+      const x = e.target.closest("[data-close]");
+      if (x) {
+        closeTab(+x.dataset.close);
+        return;
+      }
+      const t = e.target.closest(".tab");
+      if (t)
+        switchTab(+t.dataset.i);
+    });
+    $("#tabs").addEventListener("auxclick", (e) => {
+      const t = e.target.closest(".tab");
+      if (t && e.button === 1) {
+        e.preventDefault();
+        closeTab(+t.dataset.i);
+      }
+    });
+    const crumbsEl = $("#crumbs");
+    if (crumbsEl) {
+      crumbsEl.addEventListener("click", (e) => {
+        const c = e.target.closest("[data-dir]");
+        if (c) {
+          showPanel("files");
+          revealDir(c.dataset.dir);
+        }
+      });
+    }
+    addEventListener("beforeunload", (e) => {
+      if (S2.tabs.some((t) => t.buf?.dirty)) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    });
+  }
+
   // web/src/markdown.js
   var mdview = $("#mdview");
   var mdArticle = $("#md");
@@ -2280,9 +3821,9 @@
     mdArticle.replaceChildren(mdSanitize(d.mdHtml, d.path));
     mdEnhance();
     mdDrawn = d;
-    const target2 = d.mdAnchor && mdFindAnchor(d.mdAnchor);
-    if (target2)
-      mdScrollTo(target2);
+    const target = d.mdAnchor && mdFindAnchor(d.mdAnchor);
+    if (target)
+      mdScrollTo(target);
     else if (d.mdLine)
       previewLine(d.mdLine);
     else
@@ -2334,7 +3875,7 @@
   function mdSanitize(html, docPath) {
     const body = new DOMParser().parseFromString(html, "text/html").body;
     const dir = docPath.slice(0, docPath.lastIndexOf("/") + 1);
-    const base2 = MD_ORIGIN + "/" + dir.split("/").map(encodeURIComponent).join("/");
+    const base = MD_ORIGIN + "/" + dir.split("/").map(encodeURIComponent).join("/");
     for (const el of [...body.querySelectorAll("*")]) {
       if (!body.contains(el))
         continue;
@@ -2366,19 +3907,19 @@
       if (tag === "input")
         el.disabled = true;
       if (tag === "img")
-        mdSetImage(el, mdURL(attrs.src || ""), base2);
+        mdSetImage(el, mdURL(attrs.src || ""), base);
       if (tag === "a" && attrs.href)
-        mdSetLink(el, mdURL(attrs.href), base2);
+        mdSetLink(el, mdURL(attrs.href), base);
     }
     const frag = document.createDocumentFragment();
     while (body.firstChild)
       frag.appendChild(document.adoptNode(body.firstChild));
     return frag;
   }
-  function mdLocal(ref, base2) {
+  function mdLocal(ref, base) {
     let u;
     try {
-      u = new URL(ref, base2);
+      u = new URL(ref, base);
     } catch {
       return null;
     }
@@ -2390,7 +3931,7 @@
     } catch {}
     return { path: path.slice(1), hash: u.hash.slice(1) };
   }
-  function mdSetImage(img, src, base2) {
+  function mdSetImage(img, src, base) {
     img.setAttribute("loading", "lazy");
     img.setAttribute("decoding", "async");
     img.classList.add("md-zoomable");
@@ -2404,7 +3945,7 @@
       img.setAttribute("src", src);
       img.dataset.origSrc = src;
     } else if (src) {
-      const t = mdLocal(src, base2);
+      const t = mdLocal(src, base);
       if (t) {
         img.setAttribute("src", "/api/raw?path=" + encodeURIComponent(t.path));
         img.dataset.rawPath = t.path;
@@ -2412,7 +3953,7 @@
       }
     }
   }
-  function mdSetLink(a, href, base2) {
+  function mdSetLink(a, href, base) {
     if (href.startsWith("#")) {
       a.setAttribute("href", href);
       a.dataset.anchor = href.slice(1);
@@ -2427,7 +3968,7 @@
       a.rel = "noopener noreferrer";
       return;
     }
-    const t = mdLocal(href, base2);
+    const t = mdLocal(href, base);
     if (!t)
       return;
     a.setAttribute("href", "/api/raw?path=" + encodeURIComponent(t.path));
@@ -2440,17 +3981,17 @@
     for (const q of $$("blockquote", mdArticle))
       mdAlert(q);
     for (const pre of $$("pre", mdArticle)) {
-      const wrap2 = document.createElement("div");
-      wrap2.className = "md-pre";
+      const wrap = document.createElement("div");
+      wrap.className = "md-pre";
       if (pre.dataset.lang)
-        wrap2.dataset.lang = pre.dataset.lang;
-      pre.replaceWith(wrap2);
+        wrap.dataset.lang = pre.dataset.lang;
+      pre.replaceWith(wrap);
       const copy = document.createElement("button");
       copy.className = "md-copy";
       copy.title = "Copy code";
       copy.setAttribute("aria-label", "Copy code");
       copy.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5V3a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg>';
-      wrap2.append(pre, copy);
+      wrap.append(pre, copy);
     }
   }
   function mdAlert(q) {
@@ -2529,7 +4070,7 @@
     return 1;
   }
   function sourceToLine(line) {
-    vp.scrollTop = (line - 1) * LH2;
+    vp.scrollTop = (line - 1) * LH;
     for (let i = 0;i < 3; i++) {
       paint();
       const r = rowFor(line);
@@ -2629,7 +4170,7 @@
   }
   function showPreviewHit(i) {
     const marks = $$("mark.md-hit", mdArticle);
-    marks.forEach((m2, k) => m2.classList.toggle("on", k === i));
+    marks.forEach((m, k) => m.classList.toggle("on", k === i));
     const m = marks[i];
     if (!m)
       return;
@@ -2742,275 +4283,6 @@
     lb.hidden = false;
   }
 
-  // web/src/diff.js
-  var diffview = $("#diffview");
-  var diffContent = $("#diffcontent");
-  var shown = null;
-  function setLayoutPref(mode) {
-    try {
-      localStorage.setItem("px0.diffLayout", mode);
-    } catch {}
-  }
-  function layoutPref() {
-    try {
-      return localStorage.getItem("px0.diffLayout") || "split";
-    } catch {
-      return "split";
-    }
-  }
-  function syncDiffView(force = false) {
-    const d = doc_();
-    const want = d && d.diffMode ? d : null;
-    if (force && want) {
-      want.diffText = undefined;
-      want.diffHunks = undefined;
-    }
-    if (want !== shown || force) {
-      shown = want;
-      diffview.hidden = !want;
-      if (want)
-        drawDiff(want, force);
-      else
-        diffContent.replaceChildren();
-    } else if (want && want.diffHunks !== undefined) {
-      renderDiff(want);
-    }
-  }
-  function diffScrollTop() {
-    return diffview.hidden ? 0 : diffview.scrollTop;
-  }
-  async function toggleDiff() {
-    if (!S2.meta?.git)
-      return;
-    const d = doc_();
-    if (!d)
-      return;
-    if (!d.diffMode && !d.diffAvailable) {
-      setStatusNote("No diff — clean file or not a git repo", 4000);
-      return;
-    }
-    setDiffMode(d.diffMode ? "source" : layoutPref() || "split");
-  }
-  async function setDiffMode(mode) {
-    const d = doc_();
-    if (!d)
-      return;
-    if (mode !== "source" && !d.diffAvailable) {
-      setStatusNote("No diff — clean file or not a git repo", 4000);
-      return;
-    }
-    if (mode === "source") {
-      d.diffMode = null;
-      d.diffDismissed = true;
-    } else {
-      d.diffMode = mode;
-      d.diffDismissed = false;
-      setLayoutPref(mode);
-    }
-    syncPreview();
-    syncDiffView();
-    updateStatus();
-  }
-  async function drawDiff(d, force = false) {
-    if (force || d.diffText === undefined) {
-      diffContent.replaceChildren();
-      try {
-        d.diffReq = api("/api/diff", { path: d.path });
-        const j = await d.diffReq;
-        d.diffText = j.diff || "";
-        d.diffHunks = parseDiff(d.diffText);
-      } catch (e) {
-        d.diffText = "";
-        d.diffHunks = [];
-        setStatusNote("No diff: " + e.message, 4000);
-      } finally {
-        d.diffReq = null;
-      }
-      if (shown !== d)
-        return;
-    }
-    renderDiff(d);
-    if (d.diffScroll) {
-      diffview.scrollTop = d.diffScroll;
-      d.diffScroll = 0;
-    }
-  }
-  function renderDiff(d) {
-    diffContent.replaceChildren();
-    if (!d.diffHunks || !d.diffHunks.length) {
-      const p = document.createElement("div");
-      p.className = "diff-empty";
-      p.textContent = "No changes against HEAD.";
-      diffContent.append(p);
-      return;
-    }
-    const frag = document.createDocumentFragment();
-    for (const hunk of d.diffHunks) {
-      frag.append(hunkHeader(hunk));
-      frag.append(d.diffMode === "unified" ? unifiedTable(hunk) : splitTable(hunk));
-    }
-    diffContent.append(frag);
-    syncDiffAgentTargets();
-  }
-  function syncDiffAgentTargets() {
-    if (!diffview || diffview.hidden)
-      return;
-    const d = doc_();
-    if (!d)
-      return;
-    const ranges = (S2.agentTargets || []).filter((t) => t.path === d.path);
-    for (const el of diffview.querySelectorAll("[data-l]")) {
-      const l = +el.dataset.l;
-      const inAgent = ranges.some((r) => l >= r.l1 && l <= r.l2);
-      const isAnchor = ranges.some((r) => l === r.l1);
-      el.classList.toggle("agent-sel", inAgent);
-      el.classList.toggle("agent-anchor", isAnchor);
-    }
-  }
-  function hunkHeader(hunk) {
-    const el = document.createElement("div");
-    el.className = "diff-hunk-head";
-    el.textContent = "@@ -" + hunk.oldStart + " +" + hunk.newStart + " @@";
-    return el;
-  }
-  var HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@[ \t]?(.*)$/;
-  function parseDiff(text) {
-    if (!text)
-      return [];
-    const hunks = [];
-    let cur = null, oldLine = 0, newLine = 0;
-    for (const line of text.split(`
-`)) {
-      const m = HUNK_RE.exec(line);
-      if (m) {
-        oldLine = +m[1];
-        newLine = +m[3];
-        cur = { oldStart: oldLine, newStart: newLine, section: m[5] || "", rows: [] };
-        hunks.push(cur);
-        continue;
-      }
-      if (!cur || line === "" || line.startsWith("\\"))
-        continue;
-      const c = line[0], body = line.slice(1);
-      if (c === "+")
-        cur.rows.push({ type: "add", newLine: newLine++, text: body });
-      else if (c === "-")
-        cur.rows.push({ type: "del", oldLine: oldLine++, at: newLine, text: body });
-      else
-        cur.rows.push({ type: "ctx", oldLine: oldLine++, newLine: newLine++, text: body });
-    }
-    return hunks;
-  }
-  function unifiedTable(hunk) {
-    const table = document.createElement("div");
-    table.className = "diff-table diff-unified";
-    for (const row of hunk.rows) {
-      const r = document.createElement("div");
-      r.className = "diff-row diff-" + row.type;
-      anchor(r, row);
-      r.append(lineCell(row.type === "add" ? "" : row.oldLine), lineCell(row.type === "del" ? "" : row.newLine), markerCell(row.type), codeCell(row.text));
-      table.append(r);
-    }
-    return table;
-  }
-  function splitTable(hunk) {
-    const table = document.createElement("div");
-    table.className = "diff-table diff-split";
-    for (const pair of pairRows(hunk.rows)) {
-      const r = document.createElement("div");
-      r.className = "diff-row-pair";
-      r.append(splitSide(pair.left, "left"), splitSide(pair.right, "right"));
-      table.append(r);
-    }
-    return table;
-  }
-  function pairRows(rows) {
-    const pairs = [];
-    let i = 0;
-    while (i < rows.length) {
-      const row = rows[i];
-      if (row.type === "ctx") {
-        pairs.push({ left: row, right: row });
-        i++;
-        continue;
-      }
-      let dels = [], adds = [];
-      while (i < rows.length && rows[i].type === "del")
-        dels.push(rows[i++]);
-      while (i < rows.length && rows[i].type === "add")
-        adds.push(rows[i++]);
-      const n = Math.max(dels.length, adds.length);
-      for (let k = 0;k < n; k++)
-        pairs.push({ left: dels[k] || null, right: adds[k] || null });
-    }
-    return pairs;
-  }
-  function splitSide(row, side) {
-    const el = document.createElement("div");
-    el.className = "diff-side diff-side-" + side + (row ? " diff-" + row.type : " diff-blank");
-    if (!row) {
-      el.append(lineCell(""), markerCell(""), codeCell(""));
-      return el;
-    }
-    const ln = side === "left" ? row.oldLine : row.newLine;
-    anchor(el, row);
-    el.append(lineCell(ln), markerCell(row.type), codeCell(row.text));
-    return el;
-  }
-  function anchor(el, row) {
-    if (row.newLine !== undefined)
-      el.dataset.l = row.newLine;
-    else if (row.at !== undefined)
-      el.dataset.at = row.at;
-  }
-  function lineCell(n) {
-    const el = document.createElement("div");
-    el.className = "diff-ln";
-    el.textContent = n === "" || n === undefined ? "" : String(n);
-    return el;
-  }
-  var MARKS = { add: "+", del: "-", ctx: "" };
-  function markerCell(type) {
-    const el = document.createElement("div");
-    el.className = "diff-mk";
-    el.textContent = MARKS[type] || "";
-    return el;
-  }
-  function codeCell(text) {
-    const el = document.createElement("div");
-    el.className = "diff-code";
-    el.innerHTML = esc2(text || "") || "&nbsp;";
-    return el;
-  }
-  function initDiff() {
-    const sw = $("#diff-switch");
-    if (!sw)
-      return;
-    sw.addEventListener("mousedown", (e) => {
-      if (!e.target.closest("button"))
-        e.preventDefault();
-    });
-    $("#diff-source")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      setDiffMode("source");
-    });
-    $("#diff-btn")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      setDiffMode(doc_()?.diffMode || layoutPref());
-    });
-    const menu = $("#diff-menu");
-    if (menu) {
-      menu.addEventListener("click", (e) => {
-        const item = e.target.closest("[data-diff-opt]");
-        if (!item)
-          return;
-        e.stopPropagation();
-        setDiffMode(item.dataset.diffOpt);
-        item.blur();
-      });
-    }
-  }
-
   // web/src/status.js
   function updateStatus() {
     const d = doc_();
@@ -3024,18 +4296,18 @@
         posEl.textContent = d.imageMeta ? `${d.imageMeta.width} × ${d.imageMeta.height} px · ${zoomText}` : zoomText;
       }
     }
-    const isMd = !!(d && d.markdown), shown2 = previewing(d);
+    const isMd = !!(d && d.markdown), shown = previewing(d);
     const mdBtn = $('[data-action="md-preview"]');
     if (mdBtn) {
       mdBtn.hidden = !isMd;
-      mdBtn.classList.toggle("active", shown2);
+      mdBtn.classList.toggle("active", shown);
     }
     const sw = $("#md-switch");
     if (sw) {
       sw.hidden = !isMd;
       document.body.classList.toggle("md-tab", isMd);
       for (const b of sw.children)
-        b.classList.toggle("on", isMd && b.dataset.md === "preview" === shown2);
+        b.classList.toggle("on", isMd && b.dataset.md === "preview" === shown);
     }
     const hasDiff = !!(d && d.diffAvailable);
     const isDiffOn = !!(d && d.diffMode);
@@ -3228,957 +4500,655 @@
     document.fonts?.ready.then(fitStatus);
   }
 
-  // web/src/selbar.js
-  var status = $("#status");
-  var statsEl = $("#sel-stats");
-  var diffviewEl = $("#diffview");
-  var SEL_KEYS = { KeyC: "copy-ref", KeyA: "copy-agent", KeyU: "usages", KeyE: "agent-edit" };
-  var agentHandler = null;
-  function setAgentHandler(fn) {
-    agentHandler = fn;
+  // web/src/cursor.js
+  var WORD = /[A-Za-z0-9_$]/;
+  function lineText(d, n) {
+    if (d.buf)
+      return d.buf.lines[n - 1] ?? "";
+    const row = rowFor(n);
+    return row ? $(".c", row).textContent : "";
   }
-  var current = null;
-  var allText = null;
-  var allInfo = null;
-  function getSelectedRangeInfo() {
-    if (S2.selAll)
-      return allInfo;
+  function wordAtPoint(x, y) {
+    let node, off;
+    if (document.caretPositionFromPoint) {
+      const p = document.caretPositionFromPoint(x, y);
+      if (!p)
+        return null;
+      node = p.offsetNode;
+      off = p.offset;
+    } else if (document.caretRangeFromPoint) {
+      const r = document.caretRangeFromPoint(x, y);
+      if (!r)
+        return null;
+      node = r.startContainer;
+      off = r.startOffset;
+    } else
+      return null;
+    if (!node || node.nodeType !== 3)
+      return null;
+    const code = node.parentElement && node.parentElement.closest(".c");
+    const row = code && code.closest(".row");
+    if (!code || !row)
+      return null;
+    let col = 0;
+    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode();n; n = walker.nextNode()) {
+      if (n === node) {
+        col += off;
+        break;
+      }
+      col += n.nodeValue.length;
+    }
+    const full = code.textContent;
+    let a = Math.min(col, full.length), b = a;
+    while (a > 0 && WORD.test(full[a - 1]))
+      a--;
+    while (b < full.length && WORD.test(full[b]))
+      b++;
+    if (a === b)
+      return null;
+    const d = doc_();
+    return { word: full.slice(a, b), line: +row.dataset.l, col: a, path: d && d.path };
+  }
+  function colAtPoint(x, y) {
+    let node, off;
+    if (document.caretPositionFromPoint) {
+      const p = document.caretPositionFromPoint(x, y);
+      if (!p)
+        return null;
+      node = p.offsetNode;
+      off = p.offset;
+    } else if (document.caretRangeFromPoint) {
+      const r = document.caretRangeFromPoint(x, y);
+      if (!r)
+        return null;
+      node = r.startContainer;
+      off = r.startOffset;
+    } else
+      return null;
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    const row = el && el.closest(".row");
+    if (!row)
+      return null;
+    const code = $(".c", row);
+    const line = +row.dataset.l;
+    if (!code.contains(node))
+      return { line, col: el.closest(".g") ? 0 : code.textContent.length };
+    const r = document.createRange();
+    r.setStart(code, 0);
+    r.setEnd(node, off);
+    return { line, col: r.toString().length };
+  }
+  function revealCaretX(x) {
+    const d = doc_();
+    if (x == null || S2.wrap || !d)
+      return;
+    const g = rowFor(d.cur)?.querySelector(".g");
+    const gw = g ? g.offsetWidth : 0;
+    if (x < vp.scrollLeft + gw + 8)
+      vp.scrollLeft = Math.max(0, x - gw - 40);
+    else if (x > vp.scrollLeft + vp.clientWidth - 24)
+      vp.scrollLeft = x - vp.clientWidth + 60;
+  }
+  function updateDomSelection() {
+    const d = doc_();
+    if (!d)
+      return;
+    const sel = window.getSelection();
+    if (!sel)
+      return;
+    if (!d.selAnchor) {
+      if (sel.rangeCount && !sel.isCollapsed && vp.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+        sel.removeAllRanges();
+      }
+      return;
+    }
+    const pa = toPoint(d.selAnchor);
+    const headCol = d.col === Infinity ? lineText(d, d.cur).length : d.col || 0;
+    const pf = toPoint({ line: d.cur, col: headCol });
+    if (pa && pf) {
+      sel.setBaseAndExtent(pa[0], pa[1], pf[0], pf[1]);
+    }
+  }
+  function ensureAnchor(d) {
+    if (!d.selAnchor) {
+      const col = d.col === Infinity ? lineText(d, d.cur).length : d.col || 0;
+      d.selAnchor = { line: d.cur, col };
+    }
+  }
+  function moveCol(delta, shift = false) {
+    const d = doc_();
+    if (!d)
+      return;
+    if (shift)
+      ensureAnchor(d);
+    else
+      d.selAnchor = null;
+    const len = lineText(d, d.cur).length;
+    const col = Math.min(d.col || 0, len) + delta;
+    if (col < 0) {
+      if (d.cur > 1) {
+        d.col = Infinity;
+        moveCursor(-1, shift);
+      } else
+        updateDomSelection();
+      return;
+    }
+    if (col > len) {
+      if (d.cur < d.total) {
+        d.col = 0;
+        moveCursor(1, shift);
+      } else
+        updateDomSelection();
+      return;
+    }
+    d.col = col;
+    revealCaretX(placeCaret());
+    updateDomSelection();
+  }
+  function moveWord(delta, shift = false) {
+    const d = doc_();
+    if (!d)
+      return;
+    if (shift)
+      ensureAnchor(d);
+    else
+      d.selAnchor = null;
+    const text = lineText(d, d.cur);
+    const len = text.length;
+    let col = Math.min(d.col === Infinity ? len : d.col || 0, len);
+    if (delta < 0) {
+      if (col === 0) {
+        if (d.cur > 1) {
+          d.col = Infinity;
+          moveCursor(-1, shift);
+        }
+        return;
+      }
+      col--;
+      while (col > 0 && /\s/.test(text[col]))
+        col--;
+      if (WORD.test(text[col])) {
+        while (col > 0 && WORD.test(text[col - 1]))
+          col--;
+      } else {
+        while (col > 0 && !WORD.test(text[col - 1]) && !/\s/.test(text[col - 1]))
+          col--;
+      }
+    } else {
+      if (col >= len) {
+        if (d.cur < d.total) {
+          d.col = 0;
+          moveCursor(1, shift);
+        }
+        return;
+      }
+      if (WORD.test(text[col])) {
+        while (col < len && WORD.test(text[col]))
+          col++;
+      } else if (!/\s/.test(text[col])) {
+        while (col < len && !WORD.test(text[col]) && !/\s/.test(text[col]))
+          col++;
+      }
+      while (col < len && /\s/.test(text[col]))
+        col++;
+    }
+    d.col = col;
+    revealCaretX(placeCaret());
+    updateDomSelection();
+  }
+  function caretToEdge(end, shift = false) {
+    const d = doc_();
+    if (!d)
+      return;
+    if (shift)
+      ensureAnchor(d);
+    else
+      d.selAnchor = null;
+    d.col = end ? Infinity : 0;
+    revealCaretX(placeCaret());
+    updateDomSelection();
+  }
+  function moveCursor(delta, shift = false) {
+    const d = doc_();
+    if (!d)
+      return;
+    if (shift)
+      ensureAnchor(d);
+    else
+      d.selAnchor = null;
+    d.cur = Math.max(1, Math.min(d.total, d.cur + delta));
+    const y = (d.cur - 1) * LH;
+    if (y < vp.scrollTop)
+      vp.scrollTop = y - LH;
+    else if (y > vp.scrollTop + vp.clientHeight - LH * 2)
+      vp.scrollTop = y - vp.clientHeight + LH * 3;
+    render();
+    updateStatus();
+    updateDomSelection();
+  }
+  function initCursor() {
+    vp.addEventListener("mousedown", (e) => {
+      if (e.button !== 0)
+        return;
+      const row = e.target.closest(".row");
+      if (!row)
+        return;
+      const d = doc_();
+      if (!d)
+        return;
+      const targetLine = +row.dataset.l;
+      const p = colAtPoint(e.clientX, e.clientY);
+      const targetCol = p && p.line === targetLine ? p.col : 0;
+      if (e.shiftKey) {
+        ensureAnchor(d);
+        d.cur = targetLine;
+        d.col = targetCol;
+        placeCaret();
+        updateStatus();
+        updateDomSelection();
+        for (const r of rowsEl.children)
+          r.classList.toggle("cur", +r.dataset.l === d.cur);
+        return;
+      }
+      d.selAnchor = null;
+      d.cur = targetLine;
+      d.col = targetCol;
+      placeCaret();
+      updateStatus();
+      const w = wordAtPoint(e.clientX, e.clientY);
+      S2.at = w;
+      if (w)
+        S2.lastWord = w.word;
+      if (e[MOD] && w) {
+        e.preventDefault();
+        S2.at = w;
+        S2.lastWord = w.word;
+        pushHistory(d.path, d.cur);
+        gotoDefinition(w);
+        return;
+      }
+      for (const r of rowsEl.children)
+        r.classList.toggle("cur", +r.dataset.l === d.cur);
+    });
+    vp.addEventListener("dblclick", (e) => {
+      const w = wordAtPoint(e.clientX, e.clientY);
+      if (w) {
+        S2.at = w;
+        S2.lastWord = w.word;
+      }
+      S2.occ = w && w.word.length > 1 ? w.word : null;
+      paint();
+    });
+  }
+
+  // web/src/renderer.js
+  function measure() {
+    const m = $("#measure");
+    m.textContent = "x".repeat(100);
+    S2.chW = m.getBoundingClientRect().width / 100 || 7.8;
+  }
+  function layout() {
+    const d = doc_();
+    if (!d)
+      return;
+    const digits = String(d.total).length;
+    editor.style.setProperty("--gw", digits);
+    const gutter = digits * S2.chW + 30;
+    const w = S2.wrap ? vp.clientWidth : Math.max(vp.clientWidth, gutter + (d.maxCols + 4) * S2.chW);
+    sizer.style.height = d.total * LH + Math.max(120, vp.clientHeight * 0.5) + "px";
+    sizer.style.width = w + "px";
+    rowsEl.style.width = w + "px";
+  }
+  function toggleWordWrap(forced) {
+    S2.wrap = typeof forced === "boolean" ? forced : !S2.wrap;
+    document.body.classList.toggle("word-wrap", S2.wrap);
+    try {
+      localStorage.setItem("px0.wrap", S2.wrap ? "true" : "false");
+    } catch {}
+    updateEditorOptionControls();
+    layout();
+    render();
+  }
+  function toggleLineNumbers(forced) {
+    S2.lineNumbers = typeof forced === "boolean" ? forced : !S2.lineNumbers;
+    document.body.classList.toggle("hide-lines", !S2.lineNumbers);
+    layout();
+    render();
+  }
+  function applyEditorTypography(fontSize, fontFamily, lineHeight, tabSize) {
+    if (fontSize)
+      document.documentElement.style.setProperty("--fs", fontSize + "px");
+    if (fontFamily)
+      document.documentElement.style.setProperty("--mono", fontFamily);
+    if (lineHeight) {
+      document.documentElement.style.setProperty("--lh", lineHeight + "px");
+    } else if (fontSize) {
+      document.documentElement.style.setProperty("--lh", Math.round(fontSize * 1.5) + "px");
+    }
+    if (tabSize)
+      document.documentElement.style.setProperty("--tab-size", tabSize);
+    measure();
+    layout();
+    render();
+  }
+  function updateEditorOptionControls() {
+    const wrapBtn = $('[data-action="wrap"]');
+    if (wrapBtn)
+      wrapBtn.classList.toggle("active", !!S2.wrap);
+  }
+  var raf = 0;
+  function render() {
+    if (raf)
+      return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      paint();
+    });
+  }
+  function paint() {
+    const d = doc_();
+    if (!d) {
+      const c = $("#caret");
+      if (c)
+        c.hidden = true;
+      return;
+    }
+    const top = vp.scrollTop;
+    const first = Math.max(0, Math.floor(top / LH) - OVERSCAN);
+    const count = Math.ceil(vp.clientHeight / LH) + OVERSCAN * 2;
+    const last = Math.min(d.total, first + count);
+    ensureChunks(d, first, last);
+    let html = "";
+    const gut = d.gutter || null;
+    const agentRanges = (S2.agentTargets || []).filter((t) => t.path === d.path);
+    for (let i = first;i < last; i++) {
+      const n = i + 1;
+      const body = d.buf ? d.buf.highlighted[i] ?? esc2(d.buf.lines[i] ?? "") : d.lines[i];
+      let rc = "row", gc = "g";
+      if (n === d.cur)
+        rc += " cur";
+      if (agentRanges.some((r) => n >= r.l1 && n <= r.l2))
+        rc += " agent-sel";
+      if (agentRanges.some((r) => n === r.l1))
+        rc += " agent-anchor";
+      if (gut) {
+        const m = gut.marks.get(n);
+        if (m)
+          gc += m === "add" ? " gut-add" : " gut-mod";
+        if (gut.dels.has(n))
+          rc += " gut-del";
+      }
+      html += '<div class="' + rc + '" data-l="' + n + '">' + '<div class="' + gc + '">' + n + '</div><div class="c">' + (body === undefined ? "" : body) + "</div></div>";
+    }
+    const sel = saveSelection();
+    rowsEl.style.transform = "translateY(" + first * LH + "px)";
+    rowsEl.innerHTML = html;
+    rowsEl.classList.toggle("all", S2.selAll === d);
+    decorate(first, last);
+    if (sel)
+      restoreSelection(sel);
+    placeCaret();
+  }
+  var caretKey = "";
+  function placeCaret() {
+    const el = $("#caret");
+    if (!el)
+      return null;
+    const d = doc_();
+    const row = d && rowFor(d.cur);
+    if (!row) {
+      el.hidden = true;
+      return null;
+    }
+    const code = $(".c", row);
+    const col = Math.max(0, Math.min(d.col || 0, lineText(d, d.cur).length));
+    const [node, off] = toPoint({ line: d.cur, col });
+    const base = sizer.getBoundingClientRect();
+    let x, y;
+    if (node.nodeType === 3) {
+      const r = document.createRange();
+      r.setStart(node, off);
+      r.collapse(true);
+      const rect = r.getClientRects()[0] || r.getBoundingClientRect();
+      x = rect.left;
+      y = S2.wrap ? rect.top - (LH - rect.height) / 2 : row.getBoundingClientRect().top;
+    } else {
+      const cr = code.getBoundingClientRect();
+      x = cr.left + parseFloat(getComputedStyle(code).paddingLeft || "0");
+      y = cr.top;
+    }
+    const g = $(".g", row);
+    if (g && x < g.getBoundingClientRect().right - 1) {
+      el.hidden = true;
+      return null;
+    }
+    el.style.transform = "translate(" + (x - base.left) + "px," + (y - base.top) + "px)";
+    el.hidden = false;
+    const key = d.path + ":" + d.cur + ":" + col;
+    if (key !== caretKey) {
+      caretKey = key;
+      el.classList.remove("blink");
+      el.offsetWidth;
+      el.classList.add("blink");
+    }
+    return x - base.left;
+  }
+  function saveSelection() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount)
       return null;
-    const d = doc_();
-    if (!d)
+    if (!rowsEl.contains(sel.getRangeAt(0).commonAncestorContainer))
       return null;
-    const range = sel.getRangeAt(0);
-    if (diffviewEl && !diffviewEl.hidden && diffviewEl.contains(range.commonAncestorContainer)) {
-      return diffSelection(range, d);
-    }
-    if (!vp.contains(range.commonAncestorContainer))
-      return null;
-    const text = sel.toString().trim();
-    if (!text)
-      return null;
-    let startEl = range.startContainer;
-    if (startEl.nodeType !== 1)
-      startEl = startEl.parentElement;
-    let endEl = range.endContainer;
-    if (endEl.nodeType !== 1)
-      endEl = endEl.parentElement;
-    const startRow = startEl ? startEl.closest(".row") : null;
-    const endRow = endEl ? endEl.closest(".row") : null;
-    let l1 = d.cur || 1, l2 = d.cur || 1;
-    if (startRow && startRow.dataset.l)
-      l1 = +startRow.dataset.l;
-    if (endRow && endRow.dataset.l)
-      l2 = +endRow.dataset.l;
-    if (l1 > l2) {
-      const tmp = l1;
-      l1 = l2;
-      l2 = tmp;
-    }
-    return { text, l1, l2, path: d.path };
+    const a = toPos(sel.anchorNode, sel.anchorOffset);
+    const f = toPos(sel.focusNode, sel.focusOffset);
+    return a && f ? { a, f } : null;
   }
-  function diffSelection(range, d) {
-    let l1 = Infinity, l2 = -Infinity, at1 = Infinity, at2 = -Infinity;
-    const parts = [];
-    const seen = new Set;
-    for (const el of diffviewEl.querySelectorAll("[data-l], [data-at]")) {
-      if (!range.intersectsNode(el))
-        continue;
-      const code = el.querySelector(".diff-code");
-      if (el.dataset.l !== undefined) {
-        const n = +el.dataset.l;
-        if (n < l1)
-          l1 = n;
-        if (n > l2)
-          l2 = n;
-        if (seen.has(n))
+  function restoreSelection({ a, f }) {
+    const pa = toPoint(a), pf = toPoint(f);
+    if (pa && pf)
+      window.getSelection().setBaseAndExtent(pa[0], pa[1], pf[0], pf[1]);
+  }
+  function toPos(node, off) {
+    if (node === rowsEl) {
+      const row = rowsEl.children[off] || rowsEl.lastElementChild;
+      if (!row)
+        return null;
+      const atEnd = !rowsEl.children[off];
+      return { line: +row.dataset.l, col: atEnd ? $(".c", row).textContent.length : 0 };
+    }
+    const el = node.nodeType === 1 ? node : node.parentElement;
+    const row = el && el.closest(".row");
+    if (!row || !rowsEl.contains(row))
+      return null;
+    const code = $(".c", row);
+    const r = document.createRange();
+    r.selectNodeContents(code);
+    const cmp = r.comparePoint(node, off);
+    if (cmp < 0)
+      return { line: +row.dataset.l, col: 0 };
+    if (cmp > 0)
+      return { line: +row.dataset.l, col: code.textContent.length };
+    r.setEnd(node, off);
+    return { line: +row.dataset.l, col: r.toString().length };
+  }
+  function toPoint({ line, col }) {
+    const row = rowFor(line);
+    if (!row)
+      return null;
+    const code = $(".c", row);
+    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    let at = 0;
+    for (let n = walker.nextNode();n; n = walker.nextNode()) {
+      const len = n.nodeValue.length;
+      if (col <= at + len)
+        return [n, col - at];
+      at += len;
+    }
+    return [code, code.childNodes.length];
+  }
+  function decorate(first, last) {
+    const d = doc_();
+    if (S2.occ) {
+      for (const row of rowsEl.children)
+        markNodes($(".c", row), S2.occ, true, "occ");
+    }
+    if (S2.link) {
+      const row = rowFor(S2.link.line);
+      if (row)
+        wrapRange($(".c", row), S2.link.col, S2.link.col + S2.link.word.length, "link");
+    }
+    if (S2.find && S2.find.hits.length) {
+      const byLine = S2.find.byLine;
+      const act = S2.find.hits[S2.find.active];
+      for (const row of rowsEl.children) {
+        const n = +row.dataset.l;
+        if (!byLine.has(n))
           continue;
-        seen.add(n);
-      } else {
-        const n = +el.dataset.at;
-        if (n < at1)
-          at1 = n;
-        if (n > at2)
-          at2 = n;
+        const marks = markNodes($(".c", row), S2.find.q, S2.find.ci, "mark");
+        if (act && act.line === n && marks[act.n])
+          marks[act.n].classList.add("on");
       }
-      parts.push(code ? code.textContent : "");
     }
-    if (!parts.length)
-      return null;
-    if (l1 === Infinity) {
-      const last = Math.max(1, d.total || 1);
-      l1 = Math.min(last, Math.max(1, at1 - 1));
-      l2 = Math.max(l1, Math.min(last, at2));
-    }
-    const text = parts.join(`
-`).trim();
-    if (!text)
-      return null;
-    return { text, l1, l2, path: d.path, fromDiff: true };
   }
-  var selectionRef = ({ path, l1, l2 }) => path + ":" + (l1 === l2 ? l1 : l1 + "-" + l2);
-  function showSelectionBar(info) {
-    current = info;
-    const lines = info.l2 - info.l1 + 1;
-    statsEl.textContent = (lines === 1 ? "1 line" : lines + " lines") + " · " + info.text.length.toLocaleString() + " chars";
-    status.classList.add("selecting");
-    fitStatus();
-  }
-  function hideSelectionBar() {
-    closeSelMenu();
-    if (!current)
-      return;
-    current = null;
-    if (statsEl)
-      statsEl.textContent = "";
-    status.classList.remove("selecting");
-    fitStatus();
-  }
-  function updateSelectionBar() {
-    const info = getSelectedRangeInfo();
-    if (info)
-      showSelectionBar(info);
-    else
-      hideSelectionBar();
-  }
-  function selectAll() {
-    const d = doc_();
-    if (!d)
-      return;
-    window.getSelection()?.removeAllRanges();
-    S2.selAll = d;
-    allInfo = null;
-    render();
-    const text = allText = fetch("/api/raw?path=" + encodeURIComponent(d.path)).then((r) => {
-      if (!r.ok)
-        throw new Error(r.statusText);
-      return r.text();
-    });
-    text.then((t) => {
-      if (allText !== text)
-        return;
-      allInfo = { text: t, l1: 1, l2: d.total, path: d.path };
-      showSelectionBar(allInfo);
-    }, () => {
-      if (allText !== text)
-        return;
-      clearSelectAll();
-      showToast("!", "Could not read " + d.path);
-    });
-  }
-  function clearSelectAll() {
-    if (!S2.selAll)
-      return;
-    S2.selAll = null;
-    allText = null;
-    allInfo = null;
-    render();
-    hideSelectionBar();
-  }
-  function copySelectAll() {
-    const d = S2.selAll;
-    if (!d || !allText)
-      return false;
-    allText.then((t) => copyToClipboard(t, "Copied " + d.path + " (" + d.total.toLocaleString() + " lines)"), () => {});
-    return true;
-  }
-  function runSelectionAction(act) {
-    if (!current) {
-      if (act === "agent-edit") {
-        const d = doc_();
-        if (d && agentHandler) {
-          const line = d.cur || 1;
-          const text2 = d.lines && d.lines[line - 1] || "";
-          agentHandler({ text: text2, l1: line, l2: line, path: d.path });
-          return true;
-        }
-      }
-      return false;
-    }
-    const { text, path } = current;
-    const ref = selectionRef(current);
-    if (act === "copy-ref") {
-      copyToClipboard(ref, "Copied");
-    } else if (act === "copy-agent") {
-      const ext = path.split(".").pop() || "";
-      const lineStr = current.l1 === current.l2 ? "line " + current.l1 : "lines " + current.l1 + "-" + current.l2;
-      const snippet = "@" + path + " " + lineStr + "\n```" + ext + `
-` + text + "\n```";
-      copyToClipboard(snippet, "Copied");
-    } else if (act === "agent-edit") {
-      if (!agentHandler)
-        return false;
-      agentHandler(current);
-    } else if (act === "usages") {
-      findReferences(text.split(/\s+/)[0] || text);
-    } else {
-      return false;
-    }
-    return true;
-  }
-  var menu = $("#sel-menu");
-  function closeSelMenu() {
-    if (menu && !menu.hidden)
-      menu.hidden = true;
-  }
-  var SEL_MENU_ITEMS = [
-    { sel: "copy-ref", label: "Copy Ref", keys: "Alt+C" },
-    { sel: "copy-agent", label: "Copy with Context", keys: "Alt+A" },
-    { sel: "agent-edit", label: "Edit Inline", keys: "Alt+E" },
-    { sel: "usages", label: "Find Usages", keys: "Alt+U" }
-  ];
-  function openSelMenu(x, y) {
-    menu.replaceChildren();
-    for (const item of SEL_MENU_ITEMS) {
-      const btn = document.createElement("button");
-      btn.className = "sel-menu-item";
-      btn.dataset.sel = item.sel;
-      btn.setAttribute("role", "menuitem");
-      const label = document.createElement("span");
-      label.textContent = item.label;
-      btn.append(label);
-      const kbd = document.createElement("kbd");
-      kbd.className = "footer-kbd";
-      kbd.textContent = keyLabel(item.keys);
-      btn.append(kbd);
-      menu.append(btn);
-    }
-    menu.hidden = false;
-    const { offsetWidth: w, offsetHeight: h } = menu;
-    menu.style.left = Math.max(4, x + w > innerWidth - 4 ? x - w : x) + "px";
-    menu.style.top = Math.max(4, y + h > innerHeight - 4 ? y - h : y) + "px";
-  }
-  var bar = () => $("#footer-sel");
-  function initSelectionBar() {
-    document.addEventListener("mouseup", () => setTimeout(updateSelectionBar, 20));
-    vp.addEventListener("keyup", (e) => {
-      if (e.shiftKey)
-        setTimeout(updateSelectionBar, 20);
-    });
-    document.addEventListener("selectionchange", () => updateSelectionBar());
-    document.addEventListener("mousedown", (e) => {
-      if (!S2.selAll || e.button === 2 || e.target.closest?.("#footer-sel, #sel-menu"))
-        return;
-      if (e.target === vp && (e.offsetX >= vp.clientWidth || e.offsetY >= vp.clientHeight))
-        return;
-      clearSelectAll();
-    }, true);
-    for (const el of [bar(), menu]) {
-      if (!el)
+  function markNodes(el, needle, caseSensitive, cls) {
+    if (!el || !needle)
+      return [];
+    const out = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const texts = [];
+    for (let n = walker.nextNode();n; n = walker.nextNode())
+      texts.push(n);
+    for (const node of texts) {
+      const raw = node.nodeValue;
+      const hay = caseSensitive ? raw : raw.toLowerCase();
+      const nd = caseSensitive ? needle : needle.toLowerCase();
+      let i = hay.indexOf(nd), at = 0;
+      if (i < 0)
         continue;
-      el.addEventListener("mousedown", (e) => e.preventDefault());
-      el.addEventListener("click", (e) => {
-        const btn = e.target.closest("[data-sel]");
-        if (!btn)
+      const frag = document.createDocumentFragment();
+      while (i >= 0) {
+        if (i > at)
+          frag.appendChild(document.createTextNode(raw.slice(at, i)));
+        const mk = document.createElement(cls === "mark" ? "mark" : "span");
+        if (cls !== "mark")
+          mk.className = cls;
+        mk.textContent = raw.slice(i, i + nd.length);
+        frag.appendChild(mk);
+        out.push(mk);
+        at = i + nd.length;
+        i = hay.indexOf(nd, at);
+      }
+      if (at < raw.length)
+        frag.appendChild(document.createTextNode(raw.slice(at)));
+      node.parentNode.replaceChild(frag, node);
+    }
+    return out;
+  }
+  function wrapRange(el, from, to, cls) {
+    if (!el || to <= from)
+      return null;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    for (let n = walker.nextNode();n; n = walker.nextNode())
+      nodes.push(n);
+    let at = 0, out = null;
+    for (const node of nodes) {
+      const len = node.nodeValue.length;
+      const s = Math.max(from, at), e = Math.min(to, at + len);
+      if (s < e) {
+        const a = s - at, b = e - at;
+        const span = document.createElement("span");
+        span.className = cls;
+        span.textContent = node.nodeValue.slice(a, b);
+        const frag = document.createDocumentFragment();
+        if (a > 0)
+          frag.appendChild(document.createTextNode(node.nodeValue.slice(0, a)));
+        frag.appendChild(span);
+        if (b < len)
+          frag.appendChild(document.createTextNode(node.nodeValue.slice(b)));
+        node.parentNode.replaceChild(frag, node);
+        out = out || span;
+      }
+      at += len;
+      if (at >= to)
+        break;
+    }
+    return out;
+  }
+  function rowFor(line) {
+    for (const r of rowsEl.children)
+      if (+r.dataset.l === line)
+        return r;
+    return null;
+  }
+  function ensureChunks(d, first, last) {
+    if (d.buf)
+      return;
+    const c0 = Math.floor(first / CHUNK), c1 = Math.floor(Math.max(first, last - 1) / CHUNK);
+    for (let c = c0;c <= c1; c++) {
+      if (d.chunks.has(c) || d.pending.has(c))
+        continue;
+      d.pending.add(c);
+      const gen = d.gen;
+      api("/api/file", { path: d.path, start: c * CHUNK, count: CHUNK }).then((j) => {
+        if (gen !== d.gen)
           return;
-        closeSelMenu();
-        runSelectionAction(btn.dataset.sel);
-      });
-    }
-    if (!menu)
-      return;
-    document.addEventListener("contextmenu", (e) => {
-      if (menu.contains(e.target)) {
-        e.preventDefault();
-        return;
-      }
-      const inCode = vp.contains(e.target) || diffviewEl && !diffviewEl.hidden && diffviewEl.contains(e.target);
-      if (!inCode) {
-        closeSelMenu();
-        return;
-      }
-      updateSelectionBar();
-      if (!current) {
-        closeSelMenu();
-        return;
-      }
-      e.preventDefault();
-      openSelMenu(e.clientX, e.clientY);
-    });
-    document.addEventListener("mousedown", (e) => {
-      if (!menu.hidden && !menu.contains(e.target))
-        closeSelMenu();
-    }, true);
-    addEventListener("keydown", (e) => {
-      if (e.key === "Escape")
-        closeSelMenu();
-    });
-    addEventListener("resize", closeSelMenu);
-    addEventListener("blur", closeSelMenu);
-    document.addEventListener("scroll", closeSelMenu, true);
-  }
-
-  // web/src/imageview.js
-  var ivInit = false;
-  var isPanning = false;
-  var panStart = { x: 0, y: 0 };
-  var panOrigin = { x: 0, y: 0 };
-  function isImageViewing(d = doc_()) {
-    return !!(d && d.isImage);
-  }
-  function syncImageView() {
-    const d = doc_();
-    const imgView = $("#imgview");
-    if (!imgView)
-      return;
-    if (isImageViewing(d)) {
-      $("#empty").hidden = true;
-      imgView.hidden = false;
-      renderImageView(d);
-    } else {
-      imgView.hidden = true;
-    }
-  }
-  function renderImageView(d) {
-    if (!ivInit)
-      initImageViewer();
-    const img = $("#imgview-img");
-    const canvas = $("#imgview-canvas");
-    if (!img || !canvas)
-      return;
-    const rawUrl = "/api/raw?path=" + encodeURIComponent(d.path);
-    if (img.dataset.curPath !== d.path) {
-      img.dataset.curPath = d.path;
-      img.src = rawUrl;
-    }
-    if (d.imageFit === undefined)
-      d.imageFit = true;
-    if (d.imageScale === undefined)
-      d.imageScale = 1;
-    if (d.imagePanX === undefined)
-      d.imagePanX = 0;
-    if (d.imagePanY === undefined)
-      d.imagePanY = 0;
-    if (d.imageBg === undefined)
-      d.imageBg = "checker";
-    if (d.imagePixelated === undefined) {
-      d.imagePixelated = d.imageMeta ? d.imageMeta.width <= 64 && d.imageMeta.height <= 64 : false;
-    }
-    const onLoaded = () => {
-      d.imageMeta = {
-        width: img.naturalWidth,
-        height: img.naturalHeight
-      };
-      if (d.imagePixelated === undefined) {
-        d.imagePixelated = d.imageMeta.width <= 64 && d.imageMeta.height <= 64;
-      }
-      applyImageTransform(d);
-    };
-    if (img.complete && img.naturalWidth > 0) {
-      onLoaded();
-    } else {
-      img.onload = onLoaded;
-    }
-    applyImageTransform(d);
-  }
-  function applyImageTransform(d = doc_()) {
-    if (!d || !d.isImage)
-      return;
-    const canvas = $("#imgview-canvas");
-    const img = $("#imgview-img");
-    const vp2 = $("#imgview-viewport");
-    if (!canvas || !img || !vp2)
-      return;
-    const natW = d.imageMeta?.width || img.naturalWidth || 100;
-    const natH = d.imageMeta?.height || img.naturalHeight || 100;
-    let currentScale = d.imageScale || 1;
-    if (d.imageFit) {
-      const vpW = Math.max(100, vp2.clientWidth - 64);
-      const vpH = Math.max(100, vp2.clientHeight - 64);
-      const fitScale = Math.min(vpW / natW, vpH / natH);
-      currentScale = natW <= vpW && natH <= vpH ? 1 : fitScale;
-      d.imageScale = currentScale;
-      d.imagePanX = 0;
-      d.imagePanY = 0;
-    }
-    canvas.style.transform = `translate(${d.imagePanX || 0}px, ${d.imagePanY || 0}px) scale(${currentScale})`;
-    canvas.className = "bg-" + (d.imageBg || "checker");
-    img.classList.toggle("render-pixelated", !!d.imagePixelated);
-    img.classList.toggle("render-smooth", !d.imagePixelated);
-    const zoomLabel = $("#iv-zoom-label");
-    if (zoomLabel) {
-      zoomLabel.textContent = d.imageFit ? `Fit (${Math.round(currentScale * 100)}%)` : `${Math.round(currentScale * 100)}%`;
-    }
-    const bgBtn = $("#iv-bg");
-    if (bgBtn) {
-      bgBtn.textContent = d.imageBg === "dark" ? "Dark" : d.imageBg === "light" ? "Light" : "Checker";
-    }
-    const pixelBtn = $("#iv-pixel");
-    if (pixelBtn) {
-      pixelBtn.textContent = d.imagePixelated ? "Pixelated" : "Smooth";
-      pixelBtn.classList.toggle("active", !!d.imagePixelated);
-    }
-    const metaEl = $("#iv-meta");
-    if (metaEl) {
-      metaEl.textContent = `${natW} × ${natH} px · ${fmtBytes(d.size || 0)}`;
-    }
-    updateStatus();
-  }
-  function zoomImage(delta, factor = 1.25) {
-    const d = doc_();
-    if (!d || !d.isImage)
-      return;
-    d.imageFit = false;
-    if (delta > 0) {
-      d.imageScale = Math.min(32, (d.imageScale || 1) * factor);
-    } else {
-      d.imageScale = Math.max(0.05, (d.imageScale || 1) / factor);
-    }
-    applyImageTransform(d);
-  }
-  function fitImage() {
-    const d = doc_();
-    if (!d || !d.isImage)
-      return;
-    d.imageFit = true;
-    d.imagePanX = 0;
-    d.imagePanY = 0;
-    applyImageTransform(d);
-  }
-  function actualSizeImage() {
-    const d = doc_();
-    if (!d || !d.isImage)
-      return;
-    d.imageFit = false;
-    d.imageScale = 1;
-    d.imagePanX = 0;
-    d.imagePanY = 0;
-    applyImageTransform(d);
-  }
-  function cycleImageBg() {
-    const d = doc_();
-    if (!d || !d.isImage)
-      return;
-    const modes = ["checker", "dark", "light"];
-    const curIdx = modes.indexOf(d.imageBg || "checker");
-    d.imageBg = modes[(curIdx + 1) % modes.length];
-    applyImageTransform(d);
-  }
-  function toggleImagePixelated() {
-    const d = doc_();
-    if (!d || !d.isImage)
-      return;
-    d.imagePixelated = !d.imagePixelated;
-    applyImageTransform(d);
-  }
-  function panImage(dx, dy) {
-    const d = doc_();
-    if (!d || !d.isImage)
-      return;
-    d.imageFit = false;
-    d.imagePanX = (d.imagePanX || 0) + dx;
-    d.imagePanY = (d.imagePanY || 0) + dy;
-    applyImageTransform(d);
-  }
-  function handleImageKey(e) {
-    const d = doc_();
-    if (!d || !d.isImage)
-      return false;
-    if (e.key === "+" || e.key === "=") {
-      zoomImage(1);
-      return true;
-    }
-    if (e.key === "-" || e.key === "_") {
-      zoomImage(-1);
-      return true;
-    }
-    if (e.key === "0") {
-      fitImage();
-      return true;
-    }
-    if (e.key === "1") {
-      actualSizeImage();
-      return true;
-    }
-    if (e.key === "b" || e.key === "B") {
-      cycleImageBg();
-      return true;
-    }
-    if (e.key === "p" || e.key === "P") {
-      toggleImagePixelated();
-      return true;
-    }
-    if (e.key === "ArrowUp") {
-      panImage(0, 40);
-      return true;
-    }
-    if (e.key === "ArrowDown") {
-      panImage(0, -40);
-      return true;
-    }
-    if (e.key === "ArrowLeft") {
-      panImage(40, 0);
-      return true;
-    }
-    if (e.key === "ArrowRight") {
-      panImage(-40, 0);
-      return true;
-    }
-    return false;
-  }
-  function initImageViewer() {
-    if (ivInit)
-      return;
-    ivInit = true;
-    const vp2 = $("#imgview-viewport");
-    const hud = $("#imgview-hud");
-    if (!vp2)
-      return;
-    $("#iv-zoom-in")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      zoomImage(1);
-    });
-    $("#iv-zoom-out")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      zoomImage(-1);
-    });
-    $("#iv-zoom-label")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const d = doc_();
-      if (d?.imageFit)
-        actualSizeImage();
-      else
-        fitImage();
-    });
-    $("#iv-fit")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      fitImage();
-    });
-    $("#iv-100")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      actualSizeImage();
-    });
-    $("#iv-bg")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      cycleImageBg();
-    });
-    $("#iv-pixel")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleImagePixelated();
-    });
-    vp2.addEventListener("mousedown", (e) => {
-      if (e.target.closest("#imgview-hud") || e.button !== 0)
-        return;
-      const d = doc_();
-      if (!d || !d.isImage)
-        return;
-      isPanning = true;
-      panStart = { x: e.clientX, y: e.clientY };
-      panOrigin = { x: d.imagePanX || 0, y: d.imagePanY || 0 };
-      vp2.classList.add("panning");
-      e.preventDefault();
-    });
-    window.addEventListener("mousemove", (e) => {
-      if (!isPanning)
-        return;
-      const d = doc_();
-      if (!d || !d.isImage)
-        return;
-      const dx = e.clientX - panStart.x;
-      const dy = e.clientY - panStart.y;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-        d.imageFit = false;
-      }
-      d.imagePanX = panOrigin.x + dx;
-      d.imagePanY = panOrigin.y + dy;
-      applyImageTransform(d);
-    });
-    window.addEventListener("mouseup", () => {
-      if (!isPanning)
-        return;
-      isPanning = false;
-      vp2.classList.remove("panning");
-    });
-    vp2.addEventListener("wheel", (e) => {
-      const d = doc_();
-      if (!d || !d.isImage)
-        return;
-      e.preventDefault();
-      const factor = e.ctrlKey || e.metaKey ? 1.15 : Math.abs(e.deltaY) > 50 ? 1.25 : 1.1;
-      if (e.deltaY < 0) {
-        zoomImage(1, factor);
-      } else {
-        zoomImage(-1, factor);
-      }
-    }, { passive: false });
-    window.addEventListener("resize", () => {
-      const d = doc_();
-      if (d?.isImage && d.imageFit) {
-        applyImageTransform(d);
-      }
-    });
-  }
-
-  // web/src/tabs.js
-  var closedTabs = [];
-  var MAX_CLOSED = 20;
-  async function openFile(path, opts = {}) {
-    const { line, push = true, col } = opts;
-    let idx = S2.tabs.findIndex((t) => t.path === path);
-    if (idx < 0) {
-      let j;
-      const start2 = line ? Math.max(0, Math.floor((line - 1) / CHUNK) * CHUNK) : 0;
-      try {
-        j = await api("/api/file", { path, start: start2, count: CHUNK });
-      } catch (e) {
-        setStatusNote(path + ": " + e.message, 4000);
-        return;
-      }
-      const isImg = !!j.image;
-      const hasDiff = !isImg && !!j.diffAvailable;
-      const d2 = {
-        path,
-        name: path.split("/").pop(),
-        lang: isImg ? "image" : j.lang,
-        total: isImg ? 0 : j.total,
-        maxCols: isImg ? 0 : j.maxCols,
-        size: j.size,
-        lines: isImg ? [] : new Array(j.total),
-        chunks: new Set(isImg ? [] : [start2 / CHUNK]),
-        pending: new Set,
-        refining: new Set,
-        scrollTop: 0,
-        cur: line || 1,
-        outline: null,
-        gen: 0,
-        markdown: !isImg && !!j.markdown,
-        isImage: isImg,
-        gutter: null,
-        diffMode: hasDiff ? layoutPref() || "split" : null,
-        diffAvailable: hasDiff,
-        diffDismissed: false
-      };
-      if (!isImg) {
         for (let i = 0;i < j.lines.length; i++)
-          d2.lines[j.start + i] = j.lines[i];
-      }
-      d2.lsp = !isImg && j.lsp || { state: "off", server: "" };
-      S2.tabs.push(d2);
-      idx = S2.tabs.length - 1;
-      if (!isImg && j.refine)
-        refineChunk(d2, start2 / CHUNK);
-      if (!isImg)
-        loadGutter(d2);
+          d.lines[j.start + i] = j.lines[i];
+        d.chunks.add(c);
+        d.pending.delete(c);
+        if (doc_() === d)
+          render();
+        if (j.refine)
+          refineChunk(d, c);
+      }).catch(() => d.pending.delete(c));
     }
-    const prev = doc_();
-    if (prev && prev !== S2.tabs[idx])
-      prev.scrollTop = vp.scrollTop;
-    if (prev !== S2.tabs[idx]) {
-      clearSelectAll();
-      clearFind();
-    }
-    S2.active = idx;
-    const d = S2.tabs[idx];
-    $("#empty").hidden = true;
-    syncImageView();
-    syncPreview();
-    syncDiffView();
-    if (!S2.at || S2.at.path !== d.path)
-      S2.at = null;
-    S2.lsp.state = d.lsp && d.lsp.state || "off";
-    S2.lsp.server = d.lsp && d.lsp.server || "";
-    S2.lsp.missing = d.lsp && d.lsp.missing || "";
-    warmLSP(d);
-    drawTabs();
-    drawCrumbs();
-    layout();
-    if (line) {
-      d.cur = line;
-      centerLine(line);
-    } else
-      vp.scrollTop = d.scrollTop;
-    render();
-    updateStatus();
-    if ($("#panel-outline")?.classList.contains("active"))
-      loadOutline();
-    if (push)
-      pushHistory(path, line || d.cur, col);
-    saveWorkspaceState();
   }
-  async function loadGutter(d) {
-    if (!S2.meta?.git)
-      return;
-    try {
-      const j = await api("/api/gutter", { path: d.path });
-      d.diffAvailable = !!j.available;
-      if (j.available && d.diffMode === null && !d.diffDismissed) {
-        d.diffMode = layoutPref() || "split";
-        if (doc_() === d) {
-          syncDiffView();
-          syncPreview();
+  function refineChunk(d, c, delay = 800, tries = 0) {
+    if (tries === 0) {
+      if (d.refining.has(c))
+        return;
+      d.refining.add(c);
+    }
+    setTimeout(async () => {
+      if (!S2.tabs.includes(d) || d.buf || tries > 6) {
+        d.refining.delete(c);
+        return;
+      }
+      let j;
+      try {
+        j = await api("/api/file", { path: d.path, start: c * CHUNK, count: CHUNK });
+      } catch {
+        d.refining.delete(c);
+        return;
+      }
+      if (!S2.tabs.includes(d) || d.buf) {
+        d.refining.delete(c);
+        return;
+      }
+      if (!j.exact) {
+        refineChunk(d, c, Math.min(delay * 1.6, 5000), tries + 1);
+        return;
+      }
+      d.refining.delete(c);
+      let changed = false;
+      for (let i = 0;i < j.lines.length; i++) {
+        if (d.lines[j.start + i] !== j.lines[i]) {
+          d.lines[j.start + i] = j.lines[i];
+          changed = true;
         }
       }
-      if (!j.available) {
-        d.gutter = null;
-      } else {
-        const marks = new Map;
-        for (const n of j.modified)
-          marks.set(n, "mod");
-        for (const n of j.added)
-          marks.set(n, "add");
-        d.gutter = { marks, dels: new Set(j.deleted) };
-      }
-      if (doc_() === d) {
-        updateStatus();
+      if (changed && doc_() === d)
         render();
-      }
-      drawTabs();
-    } catch {}
+    }, delay);
   }
-  async function reloadOpenTabs() {
-    if (S2.tabs.length === 0)
-      return;
-    const activeDoc = doc_();
-    if (activeDoc) {
-      activeDoc.scrollTop = vp.scrollTop;
-      if (previewing(activeDoc)) {
-        const mv = $("#mdview");
-        if (mv)
-          activeDoc.mdScroll = mv.scrollTop;
-      }
-    }
-    const targets = S2.tabs.map((t) => ({
-      oldDoc: t,
-      path: t.path,
-      anchor: t.cur || 1,
-      start: t.cur ? Math.max(0, Math.floor((t.cur - 1) / CHUNK) * CHUNK) : 0
-    }));
-    const results = await Promise.allSettled(targets.map((tgt) => api("/api/file", { path: tgt.path, start: tgt.start, count: CHUNK })));
-    for (let i = 0;i < targets.length; i++) {
-      const res = results[i];
-      const tgt = targets[i];
-      const idx = S2.tabs.indexOf(tgt.oldDoc);
-      if (idx < 0)
-        continue;
-      if (res.status !== "fulfilled") {
-        if (idx === S2.active) {
-          setStatusNote(tgt.path + ": " + (res.reason?.message || "failed to load"), 4000);
-        }
-        continue;
-      }
-      const j = res.value;
-      if (j.image) {
-        tgt.oldDoc.size = j.size;
-        continue;
-      }
-      const keep = tgt.oldDoc;
-      const hasDiff = !!j.diffAvailable;
-      const newCur = Math.max(1, Math.min(keep.cur || 1, j.total));
-      const diffMode = hasDiff ? keep.diffMode || null : null;
-      const d2 = {
-        path: tgt.path,
-        name: tgt.path.split("/").pop(),
-        lang: j.lang,
-        total: j.total,
-        maxCols: j.maxCols,
-        size: j.size,
-        lines: new Array(j.total),
-        chunks: new Set([tgt.start / CHUNK]),
-        pending: new Set,
-        refining: new Set,
-        scrollTop: keep.scrollTop || 0,
-        cur: newCur,
-        col: keep.col || 0,
-        outline: null,
-        gen: 0,
-        markdown: !!j.markdown,
-        mdScroll: keep.mdScroll || 0,
-        gutter: null,
-        diffMode,
-        diffAvailable: hasDiff,
-        diffDismissed: !!keep.diffDismissed || !keep.diffMode,
-        diffScroll: keep === activeDoc && keep.diffMode ? diffScrollTop() : 0
-      };
-      for (let k = 0;k < j.lines.length; k++) {
-        d2.lines[j.start + k] = j.lines[k];
-      }
-      d2.lsp = j.lsp || { state: "off", server: "" };
-      S2.tabs[idx] = d2;
-      if (j.refine)
-        refineChunk(d2, tgt.start / CHUNK);
-    }
-    await Promise.allSettled(S2.tabs.filter((t) => !t.isImage).map((t) => loadGutter(t)));
-    const d = doc_();
-    if (d) {
-      S2.lsp.state = d.lsp && d.lsp.state || "off";
-      S2.lsp.server = d.lsp && d.lsp.server || "";
-      S2.lsp.missing = d.lsp && d.lsp.missing || "";
-      warmLSP(d);
-      syncImageView();
-      syncPreview();
-      syncDiffView(true);
+  function initRenderer() {
+    vp.addEventListener("scroll", render, { passive: true });
+    new ResizeObserver(() => {
       layout();
-      vp.scrollTop = d.scrollTop;
       render();
-      if ($("#panel-outline")?.classList.contains("active"))
-        loadOutline();
-    }
-    drawTabs();
-    drawCrumbs();
-    updateStatus();
-    saveWorkspaceState();
-  }
-  function centerLine(n) {
-    if (previewing()) {
-      previewLine(n);
-      return;
-    }
-    const y = (n - 1) * LH2 - Math.max(0, vp.clientHeight / 2 - LH2 * 2);
-    vp.scrollTop = Math.max(0, y);
-  }
-  function closeTab(i) {
-    clearSelectAll();
-    const [closed] = S2.tabs.splice(i, 1);
-    if (closed) {
-      if (closed.path) {
-        const scrollTop = i === S2.active ? vp.scrollTop : closed.scrollTop;
-        closedTabs.push({ path: closed.path, cur: closed.cur, scrollTop });
-        if (closedTabs.length > MAX_CLOSED)
-          closedTabs.shift();
-        api("/api/close", { path: closed.path }).then(() => refreshMetrics()).catch(() => {});
-      }
-      closed.lines = null;
-      closed.chunks?.clear?.();
-      closed.pending?.clear?.();
-      closed.refining?.clear?.();
-      closed.outline = null;
-    }
-    if (S2.tabs.length === 0) {
-      S2.active = -1;
-      syncImageView();
-      syncPreview();
-      syncDiffView();
-      rowsEl.innerHTML = "";
-      sizer.style.height = "0px";
-      $("#empty").hidden = false;
-      drawCrumbs();
-      drawTabs();
-      updateStatus();
-      saveWorkspaceState();
-      return;
-    }
-    S2.active = Math.min(i, S2.tabs.length - 1);
-    const d = doc_();
-    syncImageView();
-    syncPreview();
-    syncDiffView();
-    drawTabs();
-    drawCrumbs();
-    layout();
-    vp.scrollTop = d.scrollTop;
-    render();
-    updateStatus();
-    saveWorkspaceState();
-  }
-  async function reopenClosedTab() {
-    while (closedTabs.length) {
-      const t = closedTabs.pop();
-      if (S2.tabs.some((d) => d.path === t.path))
-        continue;
-      await openFile(t.path, { line: t.cur });
-      if (doc_()?.path !== t.path)
-        return;
-      vp.scrollTop = t.scrollTop;
-      render();
-      updateStatus();
-      return;
-    }
-  }
-  function drawTabs() {
-    $("#tabs").innerHTML = S2.tabs.map((t, i) => '<div class="tab' + (i === S2.active ? " active" : "") + (t.isImage ? " tab-image" : "") + (t.diffAvailable ? " git-modified" : "") + '" data-i="' + i + '" title="' + esc2(t.path) + '">' + (t.isImage ? '<svg class="tab-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><circle cx="5.5" cy="5.5" r="1.5"/><path d="M14 10l-3.5-3.5L3 14"/></svg>' : "") + '<span class="tn">' + esc2(t.name) + "</span>" + (t.diffAvailable ? '<span class="tab-git-dot" title="Modified in git">●</span>' : "") + '<span class="x" data-close="' + i + '" title="' + withKeys("Close tab ({Alt+W})") + '"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></span></div>').join("");
-    const act = $("#tabs .tab.active");
-    if (act)
-      act.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }
-  function switchTab(i) {
-    if (i === S2.active || !S2.tabs[i])
-      return;
-    clearLink();
-    const prev = doc_();
-    if (prev)
-      prev.scrollTop = vp.scrollTop;
-    S2.active = i;
-    syncImageView();
-    syncPreview();
-    syncDiffView();
-    clearFind();
-    clearSelectAll();
-    S2.at = null;
-    S2.lsp.state = S2.tabs[i].lsp && S2.tabs[i].lsp.state || "off";
-    S2.lsp.server = S2.tabs[i].lsp && S2.tabs[i].lsp.server || "";
-    S2.lsp.missing = S2.tabs[i].lsp && S2.tabs[i].lsp.missing || "";
-    warmLSP(S2.tabs[i]);
-    drawTabs();
-    drawCrumbs();
-    layout();
-    vp.scrollTop = S2.tabs[i].scrollTop;
-    render();
-    updateStatus();
-    if ($("#panel-outline")?.classList.contains("active"))
-      loadOutline();
-    pushHistory(S2.tabs[i].path, S2.tabs[i].cur);
-    saveWorkspaceState();
-  }
-  function saveWorkspaceState() {
-    try {
-      const tabs = S2.tabs.map((t) => ({ path: t.path, cur: t.cur }));
-      sessionStorage.setItem("px0.tabs", JSON.stringify({ tabs, active: S2.active }));
-    } catch {}
-  }
-  async function restoreWorkspaceTabs() {
-    try {
-      const saved = sessionStorage.getItem("px0.tabs");
-      if (!saved)
-        return false;
-      const { tabs, active } = JSON.parse(saved);
-      if (!Array.isArray(tabs) || tabs.length === 0)
-        return false;
-      for (const t of tabs) {
-        if (t.path)
-          await openFile(t.path, { line: t.cur, push: false });
-      }
-      if (typeof active === "number" && active >= 0 && active < S2.tabs.length) {
-        switchTab(active);
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  function drawCrumbs() {
-    const el = $("#crumbs");
-    if (el)
-      el.innerHTML = "";
-  }
-  function initTabs() {
-    $("#tabs").addEventListener("click", (e) => {
-      const x = e.target.closest("[data-close]");
-      if (x) {
-        closeTab(+x.dataset.close);
-        return;
-      }
-      const t = e.target.closest(".tab");
-      if (t)
-        switchTab(+t.dataset.i);
-    });
-    $("#tabs").addEventListener("auxclick", (e) => {
-      const t = e.target.closest(".tab");
-      if (t && e.button === 1) {
-        e.preventDefault();
-        closeTab(+t.dataset.i);
-      }
-    });
-    const crumbsEl = $("#crumbs");
-    if (crumbsEl) {
-      crumbsEl.addEventListener("click", (e) => {
-        const c = e.target.closest("[data-dir]");
-        if (c) {
-          showPanel("files");
-          revealDir(c.dataset.dir);
-        }
-      });
-    }
+    }).observe(editor);
   }
 
   // web/src/theme.js
@@ -4260,747 +5230,6 @@
       setTheme(all[0].id, false);
   }
 
-  // web/src/vim.js
-  var vimEnabled = false;
-  var vimMode = "NORMAL";
-  var vimCount = "";
-  var vimPending = "";
-  var vimPendingTimer = null;
-  var WORD_RE = /[A-Za-z0-9_$]/;
-  function isVimEnabled() {
-    return vimEnabled;
-  }
-  function setVimModeEnabled(enabled, persist = true) {
-    vimEnabled = !!enabled;
-    if (!vimEnabled) {
-      exitVisualMode();
-      resetVimState();
-    }
-    document.body.classList.toggle("vim-mode-enabled", vimEnabled);
-    updateVimCaret();
-    updateVimStatus();
-    const chip = $("#st-vim");
-    if (chip)
-      chip.hidden = !vimEnabled;
-    const helpBtn = $("#btn-vim-help");
-    if (helpBtn)
-      helpBtn.hidden = !vimEnabled;
-    if (persist) {
-      try {
-        localStorage.setItem("px0.editor.vimMode", vimEnabled ? "true" : "false");
-      } catch {}
-      if (S2.settings)
-        S2.settings["editor.vimMode"] = vimEnabled;
-    }
-  }
-  function updateVimCaret() {
-    if (!vimEnabled) {
-      document.body.classList.remove("vim-normal-caret");
-      return;
-    }
-    document.body.classList.toggle("vim-normal-caret", vimMode === "NORMAL");
-  }
-  function resetVimState() {
-    vimCount = "";
-    vimPending = "";
-    if (vimPendingTimer) {
-      clearTimeout(vimPendingTimer);
-      vimPendingTimer = null;
-    }
-    updateVimStatus();
-  }
-  function setVimPending(key) {
-    vimPending = key;
-    if (vimPendingTimer)
-      clearTimeout(vimPendingTimer);
-    vimPendingTimer = setTimeout(() => {
-      resetVimState();
-    }, 1400);
-    updateVimStatus();
-  }
-  function getCount() {
-    const c = parseInt(vimCount, 10);
-    return isNaN(c) || c <= 0 ? 1 : c;
-  }
-  function updateVimStatus() {
-    const chip = $("#st-vim");
-    if (!chip)
-      return;
-    chip.hidden = !vimEnabled;
-    if (!vimEnabled)
-      return;
-    chip.className = "status-vim-chip";
-    let modeLabel = vimMode;
-    if (vimMode === "VISUAL_LINE") {
-      chip.classList.add("mode-visual-line");
-      modeLabel = "V-LINE";
-    } else if (vimMode === "VISUAL") {
-      chip.classList.add("mode-visual");
-      modeLabel = "VISUAL";
-    } else {
-      chip.classList.add("mode-normal");
-      modeLabel = "NORMAL";
-    }
-    let extra = "";
-    if (vimCount)
-      extra += vimCount;
-    if (vimPending)
-      extra += vimPending;
-    if (extra) {
-      chip.innerHTML = esc2(modeLabel) + ' <span class="status-vim-pending">' + esc2(extra) + "</span>";
-    } else {
-      chip.textContent = modeLabel;
-    }
-  }
-  function wordAtCaret() {
-    const d = doc_();
-    if (!d)
-      return null;
-    const row = rowFor(d.cur);
-    if (!row)
-      return S2.at || null;
-    const code = row.querySelector(".c");
-    if (!code)
-      return S2.at || null;
-    const full = code.textContent;
-    let col = Math.min(d.col === Infinity ? full.length : d.col || 0, full.length);
-    if (col >= full.length && col > 0)
-      col = full.length - 1;
-    let a = col, b = col;
-    if (full[a] && WORD_RE.test(full[a])) {
-      while (a > 0 && WORD_RE.test(full[a - 1]))
-        a--;
-      while (b < full.length && WORD_RE.test(full[b]))
-        b++;
-      if (a < b)
-        return { word: full.slice(a, b), line: d.cur, col: a, path: d.path };
-    }
-    return S2.at || null;
-  }
-  function showHoverForCaret() {
-    const at = wordAtCaret();
-    if (!at)
-      return;
-    const caret = $("#caret");
-    let x = 120, y = 120;
-    if (caret) {
-      const r = caret.getBoundingClientRect();
-      x = Math.max(16, r.left);
-      y = r.bottom + 4;
-    }
-    showHover(at, x, y);
-  }
-  function enterVisualMode(lineWise = false) {
-    const d = doc_();
-    if (!d)
-      return;
-    vimMode = lineWise ? "VISUAL_LINE" : "VISUAL";
-    const row = rowFor(d.cur);
-    const len = row ? row.querySelector(".c")?.textContent.length || 0 : 0;
-    if (lineWise) {
-      d.selAnchor = { line: d.cur, col: 0 };
-      d.col = len;
-    } else {
-      if (!d.selAnchor) {
-        const col = d.col === Infinity ? len : d.col || 0;
-        d.selAnchor = { line: d.cur, col };
-      }
-    }
-    placeCaret();
-    updateDomSelection();
-    updateVimCaret();
-    updateVimStatus();
-  }
-  function exitVisualMode() {
-    const d = doc_();
-    vimMode = "NORMAL";
-    if (d)
-      clearSelection(d);
-    resetVimState();
-    updateVimCaret();
-    updateVimStatus();
-  }
-  function ensureLineSelection() {
-    const d = doc_();
-    if (!d || vimMode !== "VISUAL_LINE")
-      return;
-    if (!d.selAnchor)
-      d.selAnchor = { line: d.cur, col: 0 };
-    const row = rowFor(d.cur);
-    d.col = row ? row.querySelector(".c")?.textContent.length || 0 : 0;
-    placeCaret();
-    updateDomSelection();
-  }
-  function handleVimKeyDown(e) {
-    if (!vimEnabled)
-      return false;
-    const active = document.activeElement;
-    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) {
-      return false;
-    }
-    if (e.key === "Escape") {
-      if (vimMode !== "NORMAL") {
-        e.preventDefault();
-        exitVisualMode();
-        return true;
-      }
-      if (vimPending || vimCount) {
-        e.preventDefault();
-        resetVimState();
-        return true;
-      }
-      return false;
-    }
-    const d = doc_();
-    if (!d)
-      return false;
-    const isVisual = vimMode === "VISUAL" || vimMode === "VISUAL_LINE";
-    if (e.ctrlKey && !e.altKey && !e.metaKey) {
-      if (e.key === "d") {
-        e.preventDefault();
-        const half = Math.max(1, Math.floor(vp.clientHeight / LH / 2)) * getCount();
-        moveCursor(half, isVisual);
-        if (vimMode === "VISUAL_LINE")
-          ensureLineSelection();
-        resetVimState();
-        return true;
-      }
-      if (e.key === "u") {
-        e.preventDefault();
-        const half = Math.max(1, Math.floor(vp.clientHeight / LH / 2)) * getCount();
-        moveCursor(-half, isVisual);
-        if (vimMode === "VISUAL_LINE")
-          ensureLineSelection();
-        resetVimState();
-        return true;
-      }
-      if (e.key === "f") {
-        e.preventDefault();
-        const page = Math.max(1, Math.floor(vp.clientHeight / LH) - 2) * getCount();
-        moveCursor(page, isVisual);
-        if (vimMode === "VISUAL_LINE")
-          ensureLineSelection();
-        resetVimState();
-        return true;
-      }
-      if (e.key === "b") {
-        e.preventDefault();
-        const page = Math.max(1, Math.floor(vp.clientHeight / LH) - 2) * getCount();
-        moveCursor(-page, isVisual);
-        if (vimMode === "VISUAL_LINE")
-          ensureLineSelection();
-        resetVimState();
-        return true;
-      }
-      if (e.key === "o") {
-        e.preventDefault();
-        go(-getCount());
-        resetVimState();
-        return true;
-      }
-      if (e.key === "i") {
-        e.preventDefault();
-        go(getCount());
-        resetVimState();
-        return true;
-      }
-    }
-    if (e.metaKey || e.altKey)
-      return false;
-    if (isVisual) {
-      if (e.key === "v" && !e.shiftKey) {
-        e.preventDefault();
-        if (vimMode === "VISUAL")
-          exitVisualMode();
-        else
-          enterVisualMode(false);
-        return true;
-      }
-      if (e.key === "V") {
-        e.preventDefault();
-        if (vimMode === "VISUAL_LINE")
-          exitVisualMode();
-        else
-          enterVisualMode(true);
-        return true;
-      }
-      if (e.key === "y") {
-        e.preventDefault();
-        const info = getSelectedRangeInfo();
-        if (info && info.text) {
-          const lineCount = info.l2 - info.l1 + 1;
-          copyToClipboard(info.text, "Yanked " + (lineCount === 1 ? "1 line" : lineCount + " lines"));
-        }
-        exitVisualMode();
-        return true;
-      }
-      if (e.key === "Y") {
-        e.preventDefault();
-        runSelectionAction("copy-ref");
-        exitVisualMode();
-        return true;
-      }
-      if (e.key === "e" || e.key === "c") {
-        e.preventDefault();
-        runSelectionAction("agent-edit");
-        exitVisualMode();
-        return true;
-      }
-      if (e.key === "u") {
-        e.preventDefault();
-        runSelectionAction("usages");
-        exitVisualMode();
-        return true;
-      }
-    }
-    if (!vimPending && /^[0-9]$/.test(e.key)) {
-      if (e.key === "0" && !vimCount) {} else {
-        e.preventDefault();
-        vimCount += e.key;
-        updateVimStatus();
-        return true;
-      }
-    }
-    if (vimPending === "g") {
-      e.preventDefault();
-      if (e.key === "g") {
-        const count2 = parseInt(vimCount, 10);
-        if (!isNaN(count2) && count2 > 0) {
-          d.cur = Math.max(1, Math.min(d.total, count2));
-          d.col = 0;
-          const y = (d.cur - 1) * LH;
-          vp.scrollTop = Math.max(0, y - LH * 3);
-          render();
-          updateStatus();
-        } else {
-          vp.scrollTop = 0;
-          d.cur = 1;
-          d.col = 0;
-          render();
-          updateStatus();
-        }
-        if (isVisual) {
-          placeCaret();
-          updateDomSelection();
-          if (vimMode === "VISUAL_LINE")
-            ensureLineSelection();
-        }
-      } else if (e.key === "d") {
-        const w = wordAtCaret();
-        if (w) {
-          pushHistory(d.path, d.cur);
-          gotoDefinition(w);
-        }
-      } else if (e.key === "r") {
-        findReferences();
-      } else if (e.key === "h") {
-        showCalls();
-      } else if (e.key === "t") {
-        const count2 = parseInt(vimCount, 10);
-        if (!isNaN(count2) && count2 > 0 && count2 <= S2.tabs.length) {
-          switchTab(count2 - 1);
-        } else if (S2.tabs.length > 1) {
-          switchTab((S2.active + 1) % S2.tabs.length);
-        }
-      } else if (e.key === "T") {
-        if (S2.tabs.length > 1) {
-          switchTab((S2.active - 1 + S2.tabs.length) % S2.tabs.length);
-        }
-      }
-      resetVimState();
-      return true;
-    }
-    if (vimPending === "z") {
-      e.preventDefault();
-      if (e.key === "z") {
-        vp.scrollTop = Math.max(0, (d.cur - 1) * LH - (vp.clientHeight - LH) / 2);
-        render();
-        updateStatus();
-      } else if (e.key === "t") {
-        vp.scrollTop = Math.max(0, (d.cur - 1) * LH);
-        render();
-        updateStatus();
-      } else if (e.key === "b") {
-        vp.scrollTop = Math.max(0, (d.cur - 1) * LH - vp.clientHeight + LH * 2);
-        render();
-        updateStatus();
-      }
-      resetVimState();
-      return true;
-    }
-    const count = getCount();
-    switch (e.key) {
-      case "h": {
-        e.preventDefault();
-        moveCol(-count, isVisual);
-        resetVimState();
-        return true;
-      }
-      case "l": {
-        e.preventDefault();
-        moveCol(count, isVisual);
-        resetVimState();
-        return true;
-      }
-      case "j": {
-        e.preventDefault();
-        moveCursor(count, isVisual);
-        if (vimMode === "VISUAL_LINE")
-          ensureLineSelection();
-        resetVimState();
-        return true;
-      }
-      case "k": {
-        e.preventDefault();
-        moveCursor(-count, isVisual);
-        if (vimMode === "VISUAL_LINE")
-          ensureLineSelection();
-        resetVimState();
-        return true;
-      }
-      case "w": {
-        e.preventDefault();
-        moveWord(count, isVisual);
-        if (vimMode === "VISUAL_LINE")
-          ensureLineSelection();
-        resetVimState();
-        return true;
-      }
-      case "b": {
-        e.preventDefault();
-        moveWord(-count, isVisual);
-        if (vimMode === "VISUAL_LINE")
-          ensureLineSelection();
-        resetVimState();
-        return true;
-      }
-      case "0": {
-        e.preventDefault();
-        caretToEdge(false, isVisual);
-        resetVimState();
-        return true;
-      }
-      case "$": {
-        e.preventDefault();
-        caretToEdge(true, isVisual);
-        resetVimState();
-        return true;
-      }
-      case "^": {
-        e.preventDefault();
-        const row = rowFor(d.cur);
-        const text = row ? row.querySelector(".c")?.textContent || "" : "";
-        const idx = text.search(/\S/);
-        d.col = idx >= 0 ? idx : 0;
-        revealCaretX(placeCaret());
-        if (isVisual)
-          updateDomSelection();
-        resetVimState();
-        return true;
-      }
-      case "G": {
-        e.preventDefault();
-        const targetLine = vimCount ? parseInt(vimCount, 10) : d.total;
-        d.cur = Math.max(1, Math.min(d.total, targetLine));
-        d.col = 0;
-        const y = (d.cur - 1) * LH;
-        vp.scrollTop = Math.max(0, y - LH * 3);
-        render();
-        updateStatus();
-        if (isVisual) {
-          placeCaret();
-          updateDomSelection();
-          if (vimMode === "VISUAL_LINE")
-            ensureLineSelection();
-        }
-        resetVimState();
-        return true;
-      }
-      case "g": {
-        e.preventDefault();
-        setVimPending("g");
-        return true;
-      }
-      case "z": {
-        e.preventDefault();
-        setVimPending("z");
-        return true;
-      }
-      case "H": {
-        e.preventDefault();
-        const topL = Math.floor(vp.scrollTop / LH) + 1;
-        d.cur = Math.max(1, Math.min(d.total, topL));
-        render();
-        updateStatus();
-        if (isVisual) {
-          placeCaret();
-          updateDomSelection();
-          if (vimMode === "VISUAL_LINE")
-            ensureLineSelection();
-        }
-        resetVimState();
-        return true;
-      }
-      case "M": {
-        e.preventDefault();
-        const midL = Math.floor((vp.scrollTop + vp.clientHeight / 2) / LH) + 1;
-        d.cur = Math.max(1, Math.min(d.total, midL));
-        render();
-        updateStatus();
-        if (isVisual) {
-          placeCaret();
-          updateDomSelection();
-          if (vimMode === "VISUAL_LINE")
-            ensureLineSelection();
-        }
-        resetVimState();
-        return true;
-      }
-      case "L": {
-        e.preventDefault();
-        const botL = Math.floor((vp.scrollTop + vp.clientHeight - LH) / LH);
-        d.cur = Math.max(1, Math.min(d.total, botL));
-        render();
-        updateStatus();
-        if (isVisual) {
-          placeCaret();
-          updateDomSelection();
-          if (vimMode === "VISUAL_LINE")
-            ensureLineSelection();
-        }
-        resetVimState();
-        return true;
-      }
-      case "K": {
-        e.preventDefault();
-        showHoverForCaret();
-        resetVimState();
-        return true;
-      }
-      case "/": {
-        e.preventDefault();
-        openFind();
-        resetVimState();
-        return true;
-      }
-      case "?": {
-        e.preventDefault();
-        openFind();
-        findNextMatch(-1);
-        resetVimState();
-        return true;
-      }
-      case "n": {
-        e.preventDefault();
-        findNextMatch(1);
-        resetVimState();
-        return true;
-      }
-      case "N": {
-        e.preventDefault();
-        findNextMatch(-1);
-        resetVimState();
-        return true;
-      }
-      case "*": {
-        e.preventDefault();
-        const w = wordAtCaret();
-        if (w && w.word) {
-          S2.at = w;
-          S2.lastWord = w.word;
-          S2.occ = w.word;
-          paint();
-          openFind(w.word);
-          findNextMatch(1);
-        }
-        resetVimState();
-        return true;
-      }
-      case "#": {
-        e.preventDefault();
-        const w = wordAtCaret();
-        if (w && w.word) {
-          S2.at = w;
-          S2.lastWord = w.word;
-          S2.occ = w.word;
-          paint();
-          openFind(w.word);
-          findNextMatch(-1);
-        }
-        resetVimState();
-        return true;
-      }
-      case "v": {
-        e.preventDefault();
-        enterVisualMode(false);
-        resetVimState();
-        return true;
-      }
-      case "V": {
-        e.preventDefault();
-        enterVisualMode(true);
-        resetVimState();
-        return true;
-      }
-      case ":": {
-        e.preventDefault();
-        openPalette("command");
-        resetVimState();
-        return true;
-      }
-    }
-    return false;
-  }
-  var VIM_SHORTCUT_SECTIONS = [
-    {
-      title: "Modes & Motions",
-      items: [
-        [["h", "j", "k", "l"], "Move left, down, up, right"],
-        [["w", "b"], "Next / previous word boundary"],
-        [["0", "^", "$"], "Start of line / first non-blank / end of line"],
-        [["gg", "G"], "First line / last line (or [count]gg / [count]G)"],
-        [["Ctrl+d", "Ctrl+u"], "Scroll half-page down / up"],
-        [["Ctrl+f", "Ctrl+b"], "Scroll full-page down / up"],
-        [["zz", "zt", "zb"], "Center line / line to top / line to bottom"],
-        [["H", "M", "L"], "Move to top, middle, bottom visible line"]
-      ]
-    },
-    {
-      title: "Code Intelligence & LSP",
-      items: [
-        [["gd"], "Go to Definition (replaces F12)"],
-        [["gr"], "Find References across workspace (replaces Shift+F12)"],
-        [["K"], "Show hover documentation & signatures"],
-        [["gh"], "Call Trail (callers / callees)"],
-        [["Ctrl+o", "Ctrl+i"], "Jump back / forward in navigation history"]
-      ]
-    },
-    {
-      title: "Search & Occurrences",
-      items: [
-        [["/"], "Find in file (forward)"],
-        [["?"], "Find in file (backward)"],
-        [["n", "N"], "Next / previous match"],
-        [["*", "#"], "Search current word under cursor forward / backward"],
-        [["Esc"], "Clear highlights, search, and occurrences"]
-      ]
-    },
-    {
-      title: "Visual Mode & AI Agent Actions",
-      items: [
-        [["v"], "Character-wise visual selection"],
-        [["V"], "Line-wise visual selection"],
-        [["e", "c"], "Edit selection inline with AI coding agent"],
-        [["y"], "Yank (copy) code to clipboard"],
-        [["Y"], "Yank reference (file:line-range)"],
-        [["u"], "Find usages of selected symbol"],
-        [["Esc"], "Cancel selection and return to Normal mode"]
-      ]
-    },
-    {
-      title: "Tabs & Commands",
-      items: [
-        [["gt", "gT"], "Next tab / previous tab"],
-        [["[N]gt"], "Switch to tab N"],
-        [[":"], "Open Command Palette"]
-      ]
-    }
-  ];
-  function showVimHelp() {
-    let modal = $("#vim-helpsheet");
-    if (!modal) {
-      modal = document.createElement("div");
-      modal.id = "vim-helpsheet";
-      document.body.appendChild(modal);
-    }
-    const isChecked = vimEnabled ? "checked" : "";
-    modal.innerHTML = `
-    <div class="help-card vim-help-card">
-      <div class="help-header vim-help-header">
-        <div class="vim-help-title">
-          <h2>Vim Keybindings</h2>
-          <span class="help-version">Modal Navigation</span>
-        </div>
-        <div class="vim-toggle-row">
-          <label class="vim-switch-label">
-            <input type="checkbox" id="vim-toggle-input" ${isChecked}>
-            <span class="vim-switch-slider"></span>
-            <span class="vim-switch-text">${vimEnabled ? "Enabled" : "Disabled"}</span>
-          </label>
-          <button id="btn-close-vim-help" class="mini" title="Close (Esc)">✕</button>
-        </div>
-      </div>
-      <div class="vim-help-content">
-        ${VIM_SHORTCUT_SECTIONS.map((sec) => `
-          <div class="vim-help-section">
-            <div class="vim-sec-title">${esc2(sec.title)}</div>
-            <dl class="help-grid vim-help-grid">
-              ${sec.items.map(([combos, v]) => `
-                <dt>${combos.map(keyCaps).filter(Boolean).join('<span class="key-or">/</span>')}</dt>
-                <dd>${esc2(v)}</dd>
-              `).join("")}
-            </dl>
-          </div>
-        `).join("")}
-      </div>
-      <div class="vim-help-footer">
-        <button id="btn-switch-to-std-help" class="settings-btn-link">View Standard Shortcuts (?)</button>
-        <span class="agent-hint">Press Esc or click outside to dismiss</span>
-      </div>
-    </div>
-  `;
-    modal.hidden = false;
-    const toggleInput = modal.querySelector("#vim-toggle-input");
-    if (toggleInput) {
-      toggleInput.addEventListener("change", (e) => {
-        const active = e.target.checked;
-        setVimModeEnabled(active, true);
-        const txt = modal.querySelector(".vim-switch-text");
-        if (txt)
-          txt.textContent = active ? "Enabled" : "Disabled";
-        showToast("✓", active ? "Vim mode enabled" : "Vim mode disabled");
-      });
-    }
-    modal.querySelector("#btn-close-vim-help")?.addEventListener("click", closeVimHelp);
-    modal.querySelector("#btn-switch-to-std-help")?.addEventListener("click", () => {
-      closeVimHelp();
-      showHelp();
-    });
-    modal.addEventListener("click", (e) => {
-      if (e.target === modal)
-        closeVimHelp();
-    });
-  }
-  function closeVimHelp() {
-    const modal = $("#vim-helpsheet");
-    if (modal)
-      modal.hidden = true;
-  }
-  function initVim() {
-    let initial = false;
-    try {
-      const val = localStorage.getItem("px0.editor.vimMode");
-      if (val === "true")
-        initial = true;
-    } catch {}
-    if (S2.settings && S2.settings["editor.vimMode"] !== undefined) {
-      initial = S2.settings["editor.vimMode"] === true || S2.settings["editor.vimMode"] === "true";
-    }
-    setVimModeEnabled(initial, false);
-    const chip = $("#st-vim");
-    if (chip) {
-      chip.addEventListener("click", () => {
-        showVimHelp();
-      });
-    }
-    const helpBtn = $("#btn-vim-help");
-    if (helpBtn) {
-      helpBtn.addEventListener("click", () => {
-        showVimHelp();
-      });
-    }
-  }
-
   // web/src/settings.js
   var settingsModalEl = null;
   var BUILTIN_SCHEMA = [
@@ -5060,14 +5289,6 @@
       type: "select",
       default: "on",
       options: ["on", "off"]
-    },
-    {
-      key: "editor.vimMode",
-      title: "Vim Keybindings",
-      description: "Enable Vim modal navigation (Normal mode, Visual mode, motions, search, and LSP shortcuts).",
-      category: "Text Editor",
-      type: "boolean",
-      default: false
     },
     {
       key: "editor.cursorStyle",
@@ -5297,7 +5518,6 @@
     "workbench.colorTheme",
     "editor.wordWrap",
     "editor.lineNumbers",
-    "editor.vimMode",
     "editor.tabSize",
     "diffEditor.renderSideBySide",
     "editor.cursorStyle",
@@ -5402,10 +5622,6 @@
         try {
           localStorage.setItem("px0.mdPreview", S2.mdPreview ? "true" : "false");
         } catch {}
-        break;
-      }
-      case "editor.vimMode": {
-        setVimModeEnabled(val === true || val === "true", false);
         break;
       }
     }
@@ -5646,12 +5862,6 @@
         aptValuesHtml = presetPills;
       }
       const resetBtn = modified ? `<button class="settings-reset-btn" data-reset="${esc2(key)}" title="Reset to default (${esc2(String(def))})">Reset</button>` : "";
-      const extraAction = key === "editor.vimMode" ? `
-      <div style="margin: 6px 0 2px;">
-        <button type="button" class="settings-btn-link btn-vim-cheatsheet-trigger" style="cursor:pointer;font-size:11.5px;display:inline-flex;align-items:center;gap:4px;color:var(--accent-fg);">
-          <span>View Vim Keybindings Cheat Sheet</span><kbd class="footer-kbd" style="font-size:10px;">?</kbd>
-        </button>
-      </div>` : "";
       return `
       <div class="settings-card${modClass}" data-setting="${esc2(key)}">
         <div class="settings-card-left">
@@ -5663,7 +5873,6 @@
           </div>
           <div class="settings-card-desc">${esc2(desc)}</div>
           ${aptValuesHtml}
-          ${extraAction}
           <div class="settings-card-meta">
             <span class="settings-tag tag-current">Current: <b>${esc2(String(val))}</b></span>
             <span class="settings-tag tag-default">Default: <code>${esc2(String(def))}</code></span>
@@ -5789,24 +5998,24 @@
       renderSettingsNav();
       renderSettingsList();
     });
-    const listEl2 = $("#settings-list");
-    if (listEl2) {
-      listEl2.addEventListener("change", (e) => {
-        const target2 = e.target;
-        const key = target2.dataset.key;
+    const listEl = $("#settings-list");
+    if (listEl) {
+      listEl.addEventListener("change", (e) => {
+        const target = e.target;
+        const key = target.dataset.key;
         if (!key)
           return;
         let value;
-        if (target2.type === "checkbox") {
-          value = target2.checked;
-        } else if (target2.type === "number") {
-          value = parseFloat(target2.value);
+        if (target.type === "checkbox") {
+          value = target.checked;
+        } else if (target.type === "number") {
+          value = parseFloat(target.value);
         } else {
-          value = target2.value;
+          value = target.value;
         }
         handleSettingChange(key, value);
       });
-      listEl2.addEventListener("click", (e) => {
+      listEl.addEventListener("click", (e) => {
         const pill = e.target.closest(".settings-pill-tag");
         if (pill) {
           const key = pill.dataset.setKey;
@@ -5826,11 +6035,6 @@
           const key = resetBtn.dataset.reset;
           if (key)
             handleResetSetting(key);
-          return;
-        }
-        const vimHelpBtn = e.target.closest(".btn-vim-cheatsheet-trigger");
-        if (vimHelpBtn) {
-          showVimHelp();
           return;
         }
       });
@@ -5854,870 +6058,370 @@
     });
   }
 
-  // web/src/agent.js
-  var box = $("#agentbox");
-  var tpl = $("#agentbox-tpl");
-  var agentListEl = $("#agentbox-list");
-  var batchBar = $("#agent-batch-bar");
-  var batchCount = $("#agent-batch-count");
-  var batchClear = $("#agent-batch-clear");
-  var batchHarness = $("#agent-batch-harness");
-  var batchModel = $("#agent-batch-model");
-  var batchHint = $("#agent-batch-hint");
-  var batchApply = $("#agent-batch-apply");
-  var batchCancel = $("#agent-batch-cancel");
-  var batchErr = $("#agent-batch-err");
-  var sessions = new Map;
-  var agentSeq = 0;
-  var batchTimer = null;
-  var batchJobId = null;
-  var batchElapsed = "";
-  var activeBatchTargets = null;
-  var installed = () => (S2.meta?.agents || []).filter((h) => h.installed);
-  var chosen = () => S2.meta && S2.meta.agent || "";
-  var chosenModel = () => S2.meta && S2.meta.agentModel || "";
-  var targetRef = ({ path, l1, l2 }) => path + ":" + (l1 === l2 ? l1 : l1 + "-" + l2);
-  var rangesOverlap = (a, b) => a.path === b.path && a.l1 <= b.l2 && b.l1 <= a.l2;
-  function applyAgentMeta() {
-    for (const session of sessions.values()) {
-      updateSessionMeta(session);
-    }
-    syncBatchMeta();
+  // web/src/edit.js
+  var MAX_EDIT_BYTES = 2 * 1024 * 1024;
+  var MAX_LIVE_HIGHLIGHT_BYTES = 256 * 1024;
+  var UNDO_LIMIT = 100;
+  var BURST_MS = 500;
+  function editAvailable(d) {
+    return !!d && !d.isImage && typeof d.size === "number" && d.size <= MAX_EDIT_BYTES;
   }
-  function updateSessionMeta(session) {
-    if (!session.harnessSelect || !session.modelSelect)
-      return;
-    const ready = (S2.meta?.agents || []).filter((h) => h.installed);
-    const currentHarness = chosen();
-    const currentModel = chosenModel();
-    session.harnessSelect.innerHTML = "";
-    if (!ready.length) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "no harness";
-      session.harnessSelect.appendChild(opt);
-      session.harnessSelect.disabled = true;
-      session.modelSelect.innerHTML = "";
-      session.modelSelect.hidden = true;
-      return;
-    }
-    for (const h of ready) {
-      const opt = document.createElement("option");
-      opt.value = h.name;
-      opt.textContent = h.name;
-      if (h.name === currentHarness)
-        opt.selected = true;
-      session.harnessSelect.appendChild(opt);
-    }
-    const isBusy = session.el.classList.contains("busy");
-    session.harnessSelect.disabled = isBusy || !!(S2.meta && S2.meta.agentPinned);
-    session.harnessSelect.title = S2.meta && S2.meta.agentPinned ? "Fixed for this run by -agent" : "Change the coding harness";
-    const activeH = ready.find((h) => h.name === (session.harnessSelect.value || currentHarness)) || ready[0];
-    session.modelSelect.innerHTML = "";
-    const models = activeH?.models || [];
-    if (models.length > 0) {
-      for (const m of models) {
-        const opt = document.createElement("option");
-        opt.value = m;
-        opt.textContent = m;
-        if (m === currentModel)
-          opt.selected = true;
-        session.modelSelect.appendChild(opt);
-      }
-      session.modelSelect.hidden = false;
-      session.modelSelect.disabled = isBusy;
-      session.modelSelect.title = "Model for " + activeH.name;
-    } else {
-      session.modelSelect.hidden = true;
-    }
+  function isDirty(d) {
+    return !!(d && d.buf && d.buf.dirty);
   }
-  async function loadAgentAsync() {
-    try {
-      const j = await api("/api/agent/harnesses");
-      S2.meta.agents = j.harnesses || [];
-      S2.meta.agent = j.selected || S2.meta.agent || "";
-      S2.meta.agentModel = j.model || S2.meta.agentModel || "";
-      S2.meta.agentPinned = !!j.pinned;
-      applyAgentMeta();
-    } catch {}
+  function bufferText(d) {
+    return d.buf.lines.join(`
+`) + (d.buf.trailingNL ? `
+` : "");
   }
-  function syncBatchMeta() {
-    if (!batchHarness || !batchModel)
-      return;
-    const ready = installed();
-    const currentHarness = chosen();
-    const currentModel = chosenModel();
-    batchHarness.innerHTML = "";
-    if (!ready.length) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "no harness";
-      batchHarness.appendChild(opt);
-      batchHarness.disabled = true;
-      batchModel.innerHTML = "";
-      batchModel.hidden = true;
-      return;
-    }
-    for (const h of ready) {
-      const opt = document.createElement("option");
-      opt.value = h.name;
-      opt.textContent = h.name;
-      if (h.name === currentHarness)
-        opt.selected = true;
-      batchHarness.appendChild(opt);
-    }
-    const isBusy = !!batchJobId;
-    batchHarness.disabled = isBusy || !!(S2.meta && S2.meta.agentPinned);
-    batchHarness.title = S2.meta && S2.meta.agentPinned ? "Fixed for this run by -agent" : "Change the coding harness";
-    const activeH = ready.find((h) => h.name === (batchHarness.value || currentHarness)) || ready[0];
-    batchModel.innerHTML = "";
-    const models = activeH?.models || [];
-    if (models.length > 0) {
-      for (const m of models) {
-        const opt = document.createElement("option");
-        opt.value = m;
-        opt.textContent = m;
-        if (m === currentModel)
-          opt.selected = true;
-        batchModel.appendChild(opt);
-      }
-      batchModel.hidden = false;
-      batchModel.disabled = isBusy;
-      batchModel.title = "Model for " + activeH.name;
-    } else {
-      batchModel.hidden = true;
-    }
+  function colOf(d) {
+    return d.col === Infinity ? lineText(d, d.cur).length : d.col || 0;
   }
-  function getReadySessions() {
-    return [...sessions.values()].filter((s) => !s.timer && !s.jobId);
-  }
-  function syncBatchBar() {
-    if (!batchBar)
-      return;
-    const total = sessions.size;
-    const ready = getReadySessions();
-    const readyCount = ready.length;
-    const runningCount = total - readyCount;
-    box.classList.toggle("has-batch", total >= 2);
-    if (total >= 2 || batchJobId) {
-      batchBar.hidden = false;
-      if (batchJobId) {
-        if (batchCount) {
-          batchCount.textContent = readyCount > 0 ? readyCount + " remaining (" + (activeBatchTargets?.length || 0) + " in batch)" : (activeBatchTargets?.length || 0) + " in batch";
+  async function ensureBuffer(d) {
+    if (d.buf)
+      return d.buf;
+    if (!d._bufPromise) {
+      d._bufPromise = (async () => {
+        try {
+          const r = await fetch("/api/raw?path=" + encodeURIComponent(d.path));
+          if (!r.ok)
+            throw new Error("failed to load file (status " + r.status + ")");
+          const text = await r.text();
+          const trailingNL = text.endsWith(`
+`);
+          const lines = (trailingNL ? text.slice(0, -1) : text).split(`
+`);
+          d.buf = {
+            lines,
+            trailingNL,
+            highlighted: [],
+            dirty: false,
+            baseMtime: d.mtime || 0,
+            baseSize: typeof d.size === "number" ? d.size : 0,
+            gen: 0,
+            undo: [],
+            redo: [],
+            lastKind: "",
+            lastEditAt: 0
+          };
+          d.total = lines.length;
+          S2.occ = null;
+          clearFind();
+          scheduleHighlight(d, true);
+        } catch (e) {
+          showToast("!", "Could not start editing: " + e.message);
+        } finally {
+          d._bufPromise = null;
         }
-        if (batchApply)
-          batchApply.hidden = true;
-        if (batchCancel)
-          batchCancel.hidden = false;
-      } else {
-        if (batchCount) {
-          if (runningCount > 0) {
-            batchCount.textContent = readyCount + " remaining (" + runningCount + " running)";
-          } else {
-            batchCount.textContent = readyCount + " comments";
-          }
-        }
-        if (batchApply) {
-          batchApply.hidden = false;
-          batchApply.disabled = readyCount === 0;
-          const btnLabel = runningCount > 0 ? "Apply Remaining (" + readyCount + ")" : "Apply All (" + readyCount + ")";
-          batchApply.textContent = btnLabel;
-          batchApply.title = btnLabel + " (" + keyLabel("Mod+Enter") + ")";
-        }
-        if (batchCancel)
-          batchCancel.hidden = true;
-        if (batchHint) {
-          batchHint.textContent = readyCount > 0 ? keyLabel("Mod+Enter") + " to apply " + (runningCount > 0 ? "remaining" : "all") : runningCount > 0 ? runningCount + " running..." : "";
-        }
-      }
-      syncBatchMeta();
-    } else {
-      batchBar.hidden = true;
+        return d.buf;
+      })();
     }
+    return d._bufPromise;
   }
-  function anyInFlight() {
-    if (batchTimer || batchJobId)
-      return true;
-    for (const s of sessions.values())
-      if (s.timer || s.jobId)
-        return true;
-    return false;
+  function snapshot(d) {
+    return { lines: d.buf.lines.slice(), cur: d.cur, col: colOf(d) };
   }
-  function syncBoxVisibility() {
-    box.hidden = sessions.size === 0;
-    syncBatchBar();
-  }
-  function openAgentEdit(info) {
-    if (!info)
-      return;
-    for (const s of sessions.values()) {
-      if (rangesOverlap(s.target, info)) {
-        showToast("!", "Overlaps the edit already open on " + targetRef(s.target));
-        return;
-      }
+  function beginEdit(d, kind) {
+    const now = Date.now();
+    const sameBurst = kind === "char" && d.buf.lastKind === "char" && now - d.buf.lastEditAt < BURST_MS;
+    if (!sameBurst) {
+      d.buf.undo.push(snapshot(d));
+      if (d.buf.undo.length > UNDO_LIMIT)
+        d.buf.undo.shift();
+      d.buf.redo = [];
     }
-    const session = createSession(info);
-    sessions.set(session.id, session);
-    syncAgentTargets();
-    applyAgentMeta();
-    syncBoxVisibility();
-    if (chosen() && installed().some((h) => h.name === chosen())) {
-      showCompose(session);
-    } else {
-      showPicker(session);
-    }
+    d.buf.lastKind = kind;
+    d.buf.lastEditAt = now;
   }
-  function syncAgentTargets() {
-    S2.agentTargets = [...sessions.values()].map((s) => ({
-      id: s.id,
-      path: s.target.path,
-      l1: s.target.l1,
-      l2: s.target.l2
-    }));
+  function afterEdit(d, structural) {
+    d.buf.dirty = true;
+    d.buf.gen++;
+    d.selAnchor = null;
+    d.maxCols = Math.max(d.maxCols || 0, lineText(d, d.cur).length);
+    drawTabs();
+    if (structural)
+      layout();
     render();
-    syncDiffAgentTargets();
+    revealCaretX(placeCaret());
+    updateDomSelection();
+    updateStatus();
+    scheduleHighlight(d);
   }
-  function createSession(info) {
-    const el = tpl.content.firstElementChild.cloneNode(true);
-    const parent = agentListEl || box;
-    const existing = [...parent.children];
-    let inserted = false;
-    for (const child of existing) {
-      const s = [...sessions.values()].find((sess) => sess.el === child);
-      if (s && s.target) {
-        if (s.target.path === info.path && s.target.l1 > info.l1) {
-          parent.insertBefore(el, child);
-          inserted = true;
-          break;
-        }
-      }
+  function selRange(d) {
+    if (!d.selAnchor)
+      return null;
+    const a = d.selAnchor, b = { line: d.cur, col: colOf(d) };
+    if (a.line === b.line && a.col === b.col)
+      return null;
+    return a.line < b.line || a.line === b.line && a.col < b.col ? { start: a, end: b } : { start: b, end: a };
+  }
+  function deleteSelectionRange(d, { start, end }) {
+    if (start.line === end.line) {
+      const line = d.buf.lines[start.line - 1];
+      d.buf.lines[start.line - 1] = line.slice(0, start.col) + line.slice(end.col);
+    } else {
+      const first = d.buf.lines[start.line - 1].slice(0, start.col);
+      const last = d.buf.lines[end.line - 1].slice(end.col);
+      d.buf.lines.splice(start.line - 1, end.line - start.line + 1, first + last);
     }
-    if (!inserted) {
-      parent.appendChild(el);
-    }
-    const session = {
-      id: ++agentSeq,
-      target: info,
-      timer: null,
-      jobId: null,
-      harness: "",
-      el,
-      refEl: el.querySelector(".agent-ref"),
-      metaEl: el.querySelector(".agent-meta"),
-      harnessSelect: el.querySelector(".agent-harness-select"),
-      modelSelect: el.querySelector(".agent-model-select"),
-      closeBtn: el.querySelector(".agent-close"),
-      pickEl: el.querySelector(".agent-pick"),
-      composeEl: el.querySelector(".agent-compose"),
-      input: el.querySelector(".agent-input"),
-      sendBtn: el.querySelector(".agent-send"),
-      cancelBtn: el.querySelector(".agent-cancel"),
-      hintEl: el.querySelector(".agent-hint"),
-      errEl: el.querySelector(".agent-err")
-    };
-    wireSession(session);
-    refreshRef(session);
-    setBusy(session, false);
-    resetHint(session);
-    clearErr(session);
-    session.input.value = "";
-    el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    session.input.focus();
-    return session;
+    d.cur = start.line;
+    d.col = start.col;
+    d.selAnchor = null;
+    d.total = d.buf.lines.length;
   }
-  function wireSession(session) {
-    session.sendBtn.addEventListener("click", () => submit(session));
-    session.cancelBtn?.addEventListener("click", () => cancelSession(session));
-    session.closeBtn.addEventListener("click", () => closeAgentEdit(session));
-    if (session.refEl) {
-      session.refEl.addEventListener("click", () => {
-        openFile(session.target.path, { line: session.target.l1 });
-      });
-    }
-    if (session.harnessSelect) {
-      session.harnessSelect.addEventListener("change", async () => {
-        const hName = session.harnessSelect.value;
-        if (!hName)
-          return;
-        await select(hName, (msg) => showErr(session, msg));
-        session.input.focus();
-      });
-    }
-    if (session.modelSelect) {
-      session.modelSelect.addEventListener("change", async () => {
-        const hName = session.harnessSelect?.value || chosen();
-        const mName = session.modelSelect.value;
-        await select(hName, mName, (msg) => showErr(session, msg));
-        session.input.focus();
-      });
-    }
-    session.el.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Escape") {
-        e.preventDefault();
-        if (session.timer || session.jobId) {
-          cancelSession(session);
-        } else {
-          closeAgentEdit(session);
-        }
-      } else if ((e[MOD] || e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        e.preventDefault();
-        submitBatch();
-      } else if (e.key === "Enter" && !e.shiftKey && !session.composeEl.hidden && !session.timer && !session.jobId) {
-        e.preventDefault();
-        submit(session);
-      }
-    });
-  }
-  async function cancelSession(session) {
-    if (!session.timer && !session.jobId)
-      return;
-    if (session.timer) {
-      clearTimeout(session.timer);
-      session.timer = null;
-    }
-    const jobId = session.jobId;
-    session.jobId = null;
-    setBusy(session, false);
-    resetHint(session);
-    syncBatchBar();
-    refreshStatusNote();
-    showToast("!", "Cancelled edit on " + targetRef(session.target));
-    if (jobId) {
-      try {
-        await apiPost("/api/agent/cancel", { id: jobId });
-      } catch {}
-    }
-    session.input.focus();
-  }
-  function closeAgentEdit(session) {
-    if (session.timer || session.jobId) {
-      cancelSession(session);
-    }
-    sessions.delete(session.id);
-    session.el.remove();
-    syncBoxVisibility();
-    syncAgentTargets();
-  }
-  function refreshRef(session) {
-    const ref = targetRef(session.target);
-    session.refEl.textContent = ref;
-    session.refEl.title = ref + " (click to jump)";
-  }
-  function clearErr(session) {
-    const errEl = session.errEl;
-    if (!errEl)
-      return;
-    errEl.textContent = "";
-    errEl.hidden = true;
-  }
-  function showErr(session, msg, streams = []) {
-    const errEl = session.errEl;
-    if (!errEl)
-      return;
-    errEl.textContent = "";
-    const head = document.createElement("div");
-    head.className = "agent-err-msg";
-    head.textContent = msg;
-    errEl.appendChild(head);
-    for (const [label, text] of streams) {
-      if (!text)
-        continue;
-      const name = document.createElement("div");
-      name.className = "agent-err-label";
-      name.textContent = label;
-      const pre = document.createElement("pre");
-      pre.className = "agent-err-out";
-      pre.textContent = text;
-      errEl.append(name, pre);
-    }
-    errEl.hidden = false;
-  }
-  function resetHint(session) {
-    if (!session.hintEl)
-      return;
-    session.hintEl.textContent = "Enter to send, " + keyLabel("Mod+Enter") + " all, Esc to cancel";
-  }
-  function setBusy(session, busy, msg) {
-    session.el.classList.toggle("busy", busy);
-    session.input.disabled = busy;
-    if (session.sendBtn)
-      session.sendBtn.hidden = busy;
-    if (session.cancelBtn)
-      session.cancelBtn.hidden = !busy;
-    session.closeBtn.disabled = false;
-    if (session.harnessSelect)
-      session.harnessSelect.disabled = busy || !!(S2.meta && S2.meta.agentPinned);
-    if (session.modelSelect)
-      session.modelSelect.disabled = busy;
-    if (session.hintEl && msg)
-      session.hintEl.textContent = msg;
-  }
-  function showCompose(session) {
-    session.pickEl.hidden = true;
-    if (session.metaEl)
-      session.metaEl.hidden = false;
-    session.composeEl.hidden = false;
-    session.input.focus();
-  }
-  async function showPicker(session) {
-    session.composeEl.hidden = true;
-    if (session.metaEl)
-      session.metaEl.hidden = true;
-    session.pickEl.hidden = false;
-    session.pickEl.innerHTML = '<div class="hint">Looking for coding harnesses…</div>';
-    let list = S2.meta?.agents || [];
-    let settingsPath = "";
-    try {
-      const j = await api("/api/agent/harnesses");
-      list = j.harnesses || [];
-      settingsPath = j.settings || "";
-      S2.meta.agents = list;
-      S2.meta.agent = j.selected || "";
-      S2.meta.agentModel = j.model || "";
-      S2.meta.agentPinned = !!j.pinned;
-    } catch (e) {
-      session.pickEl.innerHTML = '<div class="hint">Could not look for harnesses: ' + esc2(e.message) + "</div>";
-      return;
-    }
-    const ready = list.filter((h) => h.installed);
-    if (!ready.length) {
-      showToast("!", "Could not find any coding harness like Claude Code, OpenCode, Codex, Antigravity, Aider, etc. Install one and restart px0.", 6000);
-      session.pickEl.innerHTML = '<div class="hint" style="line-height: 1.5; padding: 4px 2px;">' + "Could not find any coding harness like <b>Claude Code</b>, <b>OpenCode</b>, <b>Codex</b>, <b>Antigravity</b> (<code>agy</code>), <b>Aider</b>, <b>Goose</b>, <b>Gemini CLI</b>, or <b>Cursor Agent</b>.<br><br>" + "Please install a coding harness, make sure it is on your <code>PATH</code>, and restart px0 after that.</div>";
-      return;
-    }
-    session.pickEl.innerHTML = '<div class="hint">This harness will edit files in this workspace.</div>' + optionsHtml(ready, settingsPath);
-    session.pickEl.querySelectorAll("[data-pick]").forEach((b) => {
-      b.addEventListener("click", () => pick(session, b.dataset.pick));
-    });
-    session.pickEl.querySelectorAll(".agent-model-select").forEach((sel) => {
-      sel.addEventListener("change", async (e) => {
-        e.stopPropagation();
-        await select(sel.dataset.harness, sel.value, (msg) => showErr(session, msg));
-        showPicker(session);
-      });
-    });
-  }
-  function optionsHtml(ready, settingsPath) {
-    let html = "";
-    for (const h of ready) {
-      const isSelected = h.name === chosen();
-      html += '<div class="agent-opt-wrap">' + '<button class="agent-opt' + (isSelected ? " on" : "") + '" data-pick="' + esc2(h.name) + '">' + '<span class="agent-opt-name">' + esc2(h.name) + "</span>" + '<code class="agent-opt-cmd">' + esc2(h.cmd) + "</code></button>";
-      if (isSelected && h.models && h.models.length > 0) {
-        html += '<div class="agent-model-row">' + '<span class="agent-model-label">Model:</span>' + '<select class="agent-model-select" data-harness="' + esc2(h.name) + '">';
-        for (const m of h.models) {
-          const sel = m === (h.model || chosenModel()) ? " selected" : "";
-          html += '<option value="' + esc2(m) + '"' + sel + ">" + esc2(m) + "</option>";
-        }
-        html += "</select></div>";
-      }
-      html += "</div>";
-    }
-    if (settingsPath)
-      html += '<div class="agent-note">Remembered in ' + esc2(settingsPath) + "</div>";
-    return html;
-  }
-  async function pick(session, name) {
-    if (await select(name, (msg) => showErr(session, msg)))
-      showCompose(session);
-  }
-  async function select(name, model, onError) {
-    if (typeof model === "function") {
-      onError = model;
-      model = "";
-    }
-    try {
-      const params = { name };
-      if (model)
-        params.model = model;
-      const j = await apiPost("/api/agent/select", params);
-      S2.meta.agent = j.selected || "";
-      S2.meta.agentModel = j.model || "";
-      S2.meta.agents = j.harnesses || S2.meta.agents;
-      S2.meta.agentPinned = !!j.pinned;
-    } catch (e) {
-      if (onError)
-        onError(e.message);
+  function applyInsertAt(d, s) {
+    const col = colOf(d);
+    const parts = s.split(`
+`);
+    const line = d.buf.lines[d.cur - 1];
+    const before = line.slice(0, col), after = line.slice(col);
+    if (parts.length === 1) {
+      d.buf.lines[d.cur - 1] = before + parts[0] + after;
+      d.col = col + parts[0].length;
       return false;
     }
-    applyAgentMeta();
+    const newLines = [before + parts[0], ...parts.slice(1, -1), parts[parts.length - 1] + after];
+    d.buf.lines.splice(d.cur - 1, 1, ...newLines);
+    d.cur += parts.length - 1;
+    d.col = parts[parts.length - 1].length;
+    d.total = d.buf.lines.length;
     return true;
   }
-  async function submit(session) {
-    if (session.timer)
+  async function insertText(d, s) {
+    if (!await ensureBuffer(d))
       return;
-    clearErr(session);
-    const instruction = session.input.value.trim();
-    if (!instruction || !session.target)
+    const range = selRange(d);
+    const kind = !range && s.length === 1 && s !== `
+` ? "char" : "other";
+    beginEdit(d, kind);
+    if (range)
+      deleteSelectionRange(d, range);
+    const structural = applyInsertAt(d, s);
+    afterEdit(d, structural || !!range);
+  }
+  function insertNewline(d) {
+    return insertText(d, `
+`);
+  }
+  function insertTab(d) {
+    return insertText(d, "\t");
+  }
+  async function backspace(d) {
+    if (!await ensureBuffer(d))
       return;
-    const params = { path: session.target.path, l1: session.target.l1, l2: session.target.l2, instruction };
-    let job2;
-    try {
-      job2 = await apiPost("/api/agent/edit", params);
-    } catch (e) {
-      showErr(session, e.message);
+    const range = selRange(d);
+    if (range) {
+      beginEdit(d, "other");
+      deleteSelectionRange(d, range);
+      afterEdit(d, true);
       return;
     }
-    session.jobId = job2.id;
-    session.harness = job2.harness;
-    hideSelectionBar();
-    const initialNote = "Editing with " + (chosenModel() ? chosen() + " (" + chosenModel() + ")" : chosen()) + "...";
-    setBusy(session, true, initialNote);
-    syncBatchBar();
-    refreshStatusNote();
-    session.timer = setTimeout(() => tick(session), 400);
+    const col = colOf(d);
+    if (col > 0) {
+      beginEdit(d, "char-del");
+      const line = d.buf.lines[d.cur - 1];
+      d.buf.lines[d.cur - 1] = line.slice(0, col - 1) + line.slice(col);
+      d.col = col - 1;
+      afterEdit(d, false);
+    } else if (d.cur > 1) {
+      beginEdit(d, "other");
+      const prevLen = d.buf.lines[d.cur - 2].length;
+      d.buf.lines[d.cur - 2] += d.buf.lines[d.cur - 1];
+      d.buf.lines.splice(d.cur - 1, 1);
+      d.cur -= 1;
+      d.col = prevLen;
+      d.total = d.buf.lines.length;
+      afterEdit(d, true);
+    }
   }
-  async function tick(session) {
-    if (!session.jobId)
+  async function deleteForward(d) {
+    if (!await ensureBuffer(d))
       return;
-    let j;
-    try {
-      j = await api("/api/agent/job?id=" + session.jobId);
-    } catch (e) {
-      if (!session.jobId)
+    const range = selRange(d);
+    if (range) {
+      beginEdit(d, "other");
+      deleteSelectionRange(d, range);
+      afterEdit(d, true);
+      return;
+    }
+    const col = colOf(d);
+    const line = d.buf.lines[d.cur - 1];
+    if (col < line.length) {
+      beginEdit(d, "char-del");
+      d.buf.lines[d.cur - 1] = line.slice(0, col) + line.slice(col + 1);
+      afterEdit(d, false);
+    } else if (d.cur < d.total) {
+      beginEdit(d, "other");
+      d.buf.lines[d.cur - 1] = line + d.buf.lines[d.cur];
+      d.buf.lines.splice(d.cur, 1);
+      d.total = d.buf.lines.length;
+      afterEdit(d, true);
+    }
+  }
+  function undo(d) {
+    if (!d.buf || !d.buf.undo.length)
+      return;
+    d.buf.redo.push(snapshot(d));
+    const snap = d.buf.undo.pop();
+    d.buf.lines = snap.lines;
+    d.cur = snap.cur;
+    d.col = snap.col;
+    d.selAnchor = null;
+    d.total = d.buf.lines.length;
+    d.buf.dirty = true;
+    d.buf.gen++;
+    d.buf.lastKind = "";
+    drawTabs();
+    layout();
+    render();
+    updateDomSelection();
+    updateStatus();
+    scheduleHighlight(d);
+  }
+  function redo(d) {
+    if (!d.buf || !d.buf.redo.length)
+      return;
+    d.buf.undo.push(snapshot(d));
+    const snap = d.buf.redo.pop();
+    d.buf.lines = snap.lines;
+    d.cur = snap.cur;
+    d.col = snap.col;
+    d.selAnchor = null;
+    d.total = d.buf.lines.length;
+    d.buf.dirty = true;
+    d.buf.gen++;
+    d.buf.lastKind = "";
+    drawTabs();
+    layout();
+    render();
+    updateDomSelection();
+    updateStatus();
+    scheduleHighlight(d);
+  }
+  var highlightTimers = new WeakMap;
+  function scheduleHighlight(d, immediate = false) {
+    clearTimeout(highlightTimers.get(d));
+    const fire = async () => {
+      if (!d.buf)
         return;
-      session.timer = null;
-      if (e.body && "running" in e.body) {
-        await finish(session, e.body);
-        refreshStatusNote();
+      const content = bufferText(d);
+      if (content.length > MAX_LIVE_HIGHLIGHT_BYTES)
         return;
-      }
-      setBusy(session, false);
-      resetHint(session);
-      syncBatchBar();
-      refreshStatusNote();
-      showErr(session, e.message);
-      return;
-    }
-    if (!session.jobId)
-      return;
-    if (j.running) {
-      session.harness = j.harness;
-      session.elapsed = Math.round((j.ms || 0) / 1000) + "s";
-      setBusy(session, true, "Editing with " + j.harness + "... " + session.elapsed);
-      refreshStatusNote();
-      session.timer = setTimeout(() => tick(session), 600);
-      return;
-    }
-    session.timer = null;
-    await finish(session, j);
-    refreshStatusNote();
-  }
-  function setBatchBusy(busy, msg) {
-    if (!batchBar)
-      return;
-    batchBar.classList.toggle("busy", busy);
-    if (batchApply)
-      batchApply.hidden = busy;
-    if (batchCancel)
-      batchCancel.hidden = !busy;
-    if (batchClear)
-      batchClear.disabled = busy;
-    if (batchHarness)
-      batchHarness.disabled = busy || !!(S2.meta && S2.meta.agentPinned);
-    if (batchModel)
-      batchModel.disabled = busy;
-    if (batchHint) {
-      if (msg)
-        batchHint.textContent = msg;
-      else
-        batchHint.textContent = keyLabel("Mod+Enter") + " to apply all";
-    }
-  }
-  function clearBatchErr() {
-    if (!batchErr)
-      return;
-    batchErr.textContent = "";
-    batchErr.hidden = true;
-  }
-  function showBatchErr(msg, streams = []) {
-    if (!batchErr)
-      return;
-    batchErr.textContent = "";
-    const head = document.createElement("div");
-    head.className = "agent-err-msg";
-    head.textContent = msg;
-    batchErr.appendChild(head);
-    for (const [label, text] of streams) {
-      if (!text)
-        continue;
-      const name = document.createElement("div");
-      name.className = "agent-err-label";
-      name.textContent = label;
-      const pre = document.createElement("pre");
-      pre.className = "agent-err-out";
-      pre.textContent = text;
-      batchErr.append(name, pre);
-    }
-    batchErr.hidden = false;
-  }
-  async function submitBatch() {
-    if (batchTimer || batchJobId)
-      return;
-    clearBatchErr();
-    const ready = getReadySessions();
-    const targets = [];
-    for (const s of ready) {
-      const ins = s.input.value.trim();
-      if (ins && s.target) {
-        targets.push({ session: s, item: { path: s.target.path, l1: s.target.l1, l2: s.target.l2, instruction: ins } });
-      }
-    }
-    if (!targets.length) {
-      if (ready.length > 0) {
-        showToast("!", "Please enter an instruction for the remaining comment(s)");
-        ready[0].input.focus();
-      } else {
-        showToast("!", "All open edits are already in progress");
-      }
-      return;
-    }
-    if (targets.length === 1) {
-      submit(targets[0].session);
-      return;
-    }
-    const harnessName = chosen();
-    if (!harnessName) {
-      showToast("!", "Please select a coding harness first");
-      return;
-    }
-    let job2;
-    try {
-      job2 = await apiPostJson("/api/agent/batch", { edits: targets.map((t) => t.item) });
-    } catch (e) {
-      showBatchErr(e.message);
-      return;
-    }
-    batchJobId = job2.id;
-    activeBatchTargets = targets;
-    batchElapsed = "";
-    hideSelectionBar();
-    const initialNote = "Batch editing " + targets.length + " items with " + (chosenModel() ? chosen() + " (" + chosenModel() + ")" : chosen()) + "...";
-    setBatchBusy(true, initialNote);
-    for (const t of targets) {
-      setBusy(t.session, true, "Applying in batch...");
-    }
-    syncBatchBar();
-    refreshStatusNote();
-    batchTimer = setTimeout(() => tickBatch(targets), 400);
-  }
-  async function tickBatch(targets) {
-    if (!batchJobId)
-      return;
-    let j;
-    try {
-      j = await api("/api/agent/job?id=" + batchJobId);
-    } catch (e) {
-      if (!batchJobId)
-        return;
-      batchTimer = null;
-      if (e.body && "running" in e.body) {
-        await finishBatch(targets, e.body);
-        refreshStatusNote();
-        return;
-      }
-      setBatchBusy(false);
-      for (const t of targets) {
-        setBusy(t.session, false);
-        resetHint(t.session);
-      }
-      syncBatchBar();
-      refreshStatusNote();
-      showBatchErr(e.message);
-      return;
-    }
-    if (!batchJobId)
-      return;
-    if (j.running) {
-      batchElapsed = Math.round((j.ms || 0) / 1000) + "s";
-      setBatchBusy(true, "Applying " + targets.length + " edits with " + j.harness + "... " + batchElapsed);
-      refreshStatusNote();
-      batchTimer = setTimeout(() => tickBatch(targets), 600);
-      return;
-    }
-    batchTimer = null;
-    await finishBatch(targets, j);
-    refreshStatusNote();
-  }
-  async function finishBatch(targets, j) {
-    const currentTargets = targets;
-    batchJobId = null;
-    batchElapsed = "";
-    activeBatchTargets = null;
-    setBatchBusy(false);
-    if (j.error) {
-      for (const t of currentTargets) {
-        setBusy(t.session, false);
-        resetHint(t.session);
-      }
-      syncBatchBar();
-      showBatchErr((j.harness || "agent") + ": " + j.error, [
-        ["stderr", (j.stderr || "").trim()],
-        ["stdout", (j.stdout || j.log || "").trim()]
-      ]);
-      if (j.changed?.length)
-        reloadWorkspace(null);
-      return;
-    }
-    for (const t of currentTargets) {
-      sessions.delete(t.session.id);
-      t.session.el.remove();
-    }
-    syncBoxVisibility();
-    syncAgentTargets();
-    const changed = j.changed || [];
-    if (!changed.length && j.tracked !== false) {
-      showToast("✓", "Finished batch edit with no file changes");
-      return;
-    }
-    const focusTarget = currentTargets[0]?.session?.target;
-    if (!await reloadWorkspace(focusTarget, "Batch edited"))
-      return;
-    showToast("✓", !changed.length ? "Reloaded workspace" : changed.length === 1 ? "Updated " + changed[0] + " (" + currentTargets.length + " edits)" : "Updated " + changed.length + " files across " + currentTargets.length + " edits");
-  }
-  async function cancelBatch() {
-    if (!batchTimer && !batchJobId)
-      return;
-    if (batchTimer) {
-      clearTimeout(batchTimer);
-      batchTimer = null;
-    }
-    const id = batchJobId;
-    batchJobId = null;
-    batchElapsed = "";
-    setBatchBusy(false);
-    if (activeBatchTargets) {
-      for (const t of activeBatchTargets) {
-        setBusy(t.session, false);
-        resetHint(t.session);
-      }
-    }
-    activeBatchTargets = null;
-    syncBatchBar();
-    refreshStatusNote();
-    showToast("!", "Cancelled batch edit");
-    if (id) {
+      const gen = d.buf.gen;
+      let j;
       try {
-        await apiPost("/api/agent/cancel", { id });
-      } catch {}
-    }
-  }
-  function clearAllEdits() {
-    if (batchJobId)
-      cancelBatch();
-    for (const s of [...sessions.values()]) {
-      closeAgentEdit(s);
-    }
-  }
-  function refreshStatusNote() {
-    const busySessions = [...sessions.values()].filter((s) => s.timer || s.jobId);
-    const batchCount2 = batchJobId ? activeBatchTargets?.length || 0 : 0;
-    const individualBusy = busySessions.filter((s) => !activeBatchTargets?.some((t) => t.session === s));
-    if (batchJobId && individualBusy.length > 0) {
-      setStatusNote("Batch editing " + batchCount2 + " items + " + individualBusy.length + " edit running... " + (batchElapsed || ""));
-    } else if (batchJobId) {
-      setStatusNote("Batch editing " + batchCount2 + " items with " + chosen() + "... " + (batchElapsed || ""));
-    } else if (!individualBusy.length) {
-      setStatusNote("");
-    } else if (individualBusy.length === 1) {
-      const s = individualBusy[0];
-      setStatusNote("Editing with " + (s.harness || chosen()) + "... " + (s.elapsed || ""));
-    } else {
-      setStatusNote(individualBusy.length + " edits running...");
-    }
-  }
-  async function finish(session, j) {
-    const editTarget = session.target;
-    if (j.error) {
-      setBusy(session, false);
-      resetHint(session);
-      showErr(session, (j.harness || "agent") + ": " + j.error, [
-        ["stderr", (j.stderr || "").trim()],
-        ["stdout", (j.stdout || j.log || "").trim()]
-      ]);
-      if (j.changed?.length)
-        reloadWorkspace(null);
-      return;
-    }
-    sessions.delete(session.id);
-    session.el.remove();
-    syncBoxVisibility();
-    syncAgentTargets();
-    const changed = j.changed || [];
-    if (!changed.length && j.tracked !== false) {
-      showToast("✓", "Finished with no file changes");
-      return;
-    }
-    if (!await reloadWorkspace(editTarget, "Edited"))
-      return;
-    showToast("✓", !changed.length ? "Reloaded the workspace" : changed.length === 1 ? "Updated " + changed[0] : "Updated " + changed.length + " files");
-  }
-  var reloadChain = Promise.resolve();
-  function reloadWorkspace(focus, what = "Changed") {
-    const run = async () => {
-      try {
-        await api("/api/reindex");
-        await reloadOpenTabs();
-        if (focus?.path) {
-          await openFile(focus.path, { line: focus.l1, push: false });
-        }
-        await refreshTree();
-      } catch (e) {
-        showToast("!", what + ", but the reload failed: " + e.message);
-        return false;
+        j = await apiPostJson("/api/highlight", { path: d.path, content });
+      } catch {
+        return;
       }
-      return true;
+      if (!d.buf || d.buf.gen !== gen)
+        return;
+      d.buf.highlighted = j.lines;
+      d.maxCols = Math.max(d.maxCols || 0, j.maxCols || 0);
+      render();
     };
-    const result = reloadChain.then(run, run);
-    reloadChain = result.then(() => {}, () => {});
-    return result;
+    if (immediate)
+      fire();
+    else
+      highlightTimers.set(d, setTimeout(fire, 300));
   }
-  function initAgent() {
-    if (!box || !tpl)
+  var editBanner = $("#edit-banner");
+  function hideConflictBanner() {
+    if (editBanner)
+      editBanner.hidden = true;
+  }
+  function showConflict(d, body) {
+    if (!editBanner)
       return;
-    setAgentHandler(openAgentEdit);
-    if (batchApply)
-      batchApply.addEventListener("click", () => submitBatch());
-    if (batchCancel)
-      batchCancel.addEventListener("click", () => cancelBatch());
-    if (batchClear)
-      batchClear.addEventListener("click", () => clearAllEdits());
-    if (batchHarness) {
-      batchHarness.addEventListener("change", async () => {
-        const hName = batchHarness.value;
-        if (!hName)
-          return;
-        await select(hName, (msg) => showBatchErr(msg));
-      });
-    }
-    if (batchModel) {
-      batchModel.addEventListener("change", async () => {
-        const hName = batchHarness?.value || chosen();
-        const mName = batchModel.value;
-        await select(hName, mName, (msg) => showBatchErr(msg));
-      });
-    }
-    document.addEventListener("click", (e) => {
-      const row = e.target.closest(".row.agent-sel, .row.agent-anchor, .diff-row.agent-sel, .diff-row.agent-anchor, .diff-side.agent-sel, .diff-side.agent-anchor");
-      if (!row)
-        return;
-      const line = +row.dataset.l;
-      const d = S2.docs[S2.active];
-      if (!d)
-        return;
-      for (const s of sessions.values()) {
-        if (s.target.path === d.path && line >= s.target.l1 && line <= s.target.l2) {
-          s.input.focus();
-          s.el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-          break;
-        }
-      }
+    editBanner.hidden = false;
+    editBanner.replaceChildren();
+    const msg = document.createElement("span");
+    msg.className = "edit-banner-msg";
+    msg.textContent = d.path + " changed on disk since you started editing.";
+    const overwrite = document.createElement("button");
+    overwrite.className = "edit-banner-btn";
+    overwrite.textContent = "Overwrite anyway";
+    overwrite.addEventListener("click", () => {
+      d.buf.baseMtime = body.mtime;
+      d.buf.baseSize = body.size;
+      hideConflictBanner();
+      saveBuffer(d);
     });
-    addEventListener("beforeunload", (e) => {
-      if (!anyInFlight())
+    const discard = document.createElement("button");
+    discard.className = "edit-banner-btn";
+    discard.textContent = "Discard my edits";
+    discard.addEventListener("click", () => {
+      const trailingNL = body.content.endsWith(`
+`);
+      d.buf.lines = (trailingNL ? body.content.slice(0, -1) : body.content).split(`
+`);
+      d.buf.trailingNL = trailingNL;
+      d.buf.baseMtime = body.mtime;
+      d.buf.baseSize = body.size;
+      d.buf.dirty = false;
+      d.buf.undo = [];
+      d.buf.redo = [];
+      d.total = d.buf.lines.length;
+      d.cur = Math.min(d.cur, d.total);
+      d.selAnchor = null;
+      hideConflictBanner();
+      drawTabs();
+      layout();
+      render();
+      updateStatus();
+      scheduleHighlight(d, true);
+    });
+    editBanner.append(msg, overwrite, discard);
+  }
+  async function saveBuffer(d) {
+    if (!d.buf)
+      return;
+    const content = bufferText(d);
+    try {
+      const j = await apiPostJson("/api/file/save", {
+        path: d.path,
+        content,
+        mtime: d.buf.baseMtime,
+        size: d.buf.baseSize
+      });
+      d.buf.baseMtime = j.mtime;
+      d.buf.baseSize = j.size;
+      d.mtime = j.mtime;
+      d.size = j.size;
+      d.buf.dirty = false;
+      hideConflictBanner();
+      showToast("✓", "Saved");
+      drawTabs();
+    } catch (e) {
+      if (e.body && typeof e.body.content === "string")
+        showConflict(d, e.body);
+      else
+        showToast("!", "Save failed: " + e.message);
+    }
+  }
+  function initEdit() {
+    vp.addEventListener("paste", (e) => {
+      const d = doc_();
+      if (!d || !editAvailable(d))
+        return;
+      const text = e.clipboardData?.getData("text/plain");
+      if (!text)
         return;
       e.preventDefault();
-      e.returnValue = "";
+      insertText(d, text);
+    });
+    vp.addEventListener("cut", async (e) => {
+      const d = doc_();
+      if (!d || !editAvailable(d))
+        return;
+      const range = selRange(d);
+      if (!range)
+        return;
+      if (!await ensureBuffer(d))
+        return;
+      beginEdit(d, "other");
+      deleteSelectionRange(d, range);
+      afterEdit(d, true);
     });
   }
 
@@ -6734,6 +6438,9 @@
     [["Mod+G"], "Go to line"],
     [["Mod+D"], "Toggle diff view (git)"],
     [["Alt+Z"], "Toggle word wrap"],
+    [["Click, then type"], "Edit the file directly"],
+    [["Mod+S"], "Save"],
+    [["Mod+Z", "Mod+Shift+Z"], "Undo / redo edit"],
     [["Alt+M"], "Toggle Markdown preview"],
     [["Enter", "Shift+Enter"], "Next / previous match"],
     [["F12", "Mod+Click"], "Go to definition"],
@@ -6760,13 +6467,8 @@
   function showHelp() {
     const h = $("#helpsheet");
     const ver = S2.meta?.version ? ` <span class="help-version">v${esc2(S2.meta.version)}</span>` : "";
-    h.innerHTML = '<div class="help-card"><div class="help-header"><h2>Keyboard Shortcuts</h2>' + ver + '<button id="btn-switch-to-vim-help" class="settings-btn-link" style="margin-left:auto;font-size:12px;cursor:pointer;">View Vim Keybindings</button></div><dl class="help-grid">' + SHORTCUTS.map(([combos, v]) => "<dt>" + combos.map(keyCaps).filter(Boolean).join('<span class="key-or">/</span>') + "</dt>" + "<dd>" + esc2(v) + "</dd>").join("") + "</dl></div>";
+    h.innerHTML = '<div class="help-card"><div class="help-header"><h2>Keyboard Shortcuts</h2>' + ver + '</div><dl class="help-grid">' + SHORTCUTS.map(([combos, v]) => "<dt>" + combos.map(keyCaps).filter(Boolean).join('<span class="key-or">/</span>') + "</dt>" + "<dd>" + esc2(v) + "</dd>").join("") + "</dl></div>";
     h.hidden = false;
-    h.querySelector("#btn-switch-to-vim-help")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      h.hidden = true;
-      showVimHelp();
-    });
   }
   var inField = (el) => el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
   function initShortcuts() {
@@ -6801,8 +6503,6 @@
         openPalette("command");
       else if (act === "settings")
         openSettings("ui");
-      else if (act === "vim-help")
-        showVimHelp();
       else if (act === "help")
         showHelp();
     });
@@ -6812,10 +6512,6 @@
         const lb = $("#img-lightbox");
         if (lb && !lb.hidden) {
           lb.hidden = true;
-          return;
-        }
-        if (!$("#vim-helpsheet")?.hidden) {
-          closeVimHelp();
           return;
         }
         if (isSettingsOpen()) {
@@ -6836,6 +6532,11 @@
         }
         if (!findbar.hidden) {
           clearFind();
+          return;
+        }
+        const eb = $("#edit-banner");
+        if (eb && !eb.hidden) {
+          eb.hidden = true;
           return;
         }
         if (S2.selAll) {
@@ -6923,6 +6624,25 @@
         }
         return;
       }
+      if (mod && !e.shiftKey && !e.altKey && (e.key === "s" || e.key === "S")) {
+        const d = doc_();
+        if (d && isDirty(d)) {
+          e.preventDefault();
+          saveBuffer(d);
+        }
+        return;
+      }
+      if (mod && !e.altKey && (e.key === "z" || e.key === "Z")) {
+        const d = doc_();
+        if (d && editAvailable(d)) {
+          e.preventDefault();
+          if (e.shiftKey)
+            redo(d);
+          else
+            undo(d);
+        }
+        return;
+      }
       if (mod && (e.key === "w" || e.key === "W") || e.altKey && e.code === "KeyW") {
         e.preventDefault();
         e.stopPropagation();
@@ -7006,8 +6726,36 @@
         e.preventDefault();
         return;
       }
-      if (handleVimKeyDown(e))
-        return;
+      if (!mod && !e.altKey) {
+        const d = doc_();
+        if (d && editAvailable(d)) {
+          if (e.key === "Backspace") {
+            e.preventDefault();
+            backspace(d);
+            return;
+          }
+          if (e.key === "Delete") {
+            e.preventDefault();
+            deleteForward(d);
+            return;
+          }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            insertNewline(d);
+            return;
+          }
+          if (e.key === "Tab") {
+            e.preventDefault();
+            insertTab(d);
+            return;
+          }
+          if (e.key.length === 1) {
+            e.preventDefault();
+            insertText(d, e.key);
+            return;
+          }
+        }
+      }
       if (e.key === "?") {
         e.preventDefault();
         showHelp();
@@ -7107,12 +6855,12 @@
       }
       if (e.key === "PageDown") {
         e.preventDefault();
-        moveCursor(Math.floor(vp.clientHeight / LH2) - 2, shift);
+        moveCursor(Math.floor(vp.clientHeight / LH) - 2, shift);
         return;
       }
       if (e.key === "PageUp") {
         e.preventDefault();
-        moveCursor(-(Math.floor(vp.clientHeight / LH2) - 2), shift);
+        moveCursor(-(Math.floor(vp.clientHeight / LH) - 2), shift);
         return;
       }
     }, { capture: true });
@@ -7164,8 +6912,6 @@
         closeTab(0);
     } },
     { name: withKeys("Reopen Closed Tab ({Alt+Shift+T})"), run: () => reopenClosedTab() },
-    { name: "Preferences: Toggle Vim Keybindings", run: () => setVimModeEnabled(!isVimEnabled(), true) },
-    { name: "Help: Vim Keybindings Cheat Sheet", run: showVimHelp },
     { name: "Keyboard Shortcuts", run: showHelp }
   ];
   var PAL_MODES = {
@@ -7368,8 +7114,8 @@
   initMetrics();
   initStatusFit();
   initSettings();
-  initVim();
   initImageViewer();
+  initEdit();
   (async function boot() {
     try {
       initTheme();

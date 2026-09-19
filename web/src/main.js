@@ -20,8 +20,8 @@ import { initDiff } from './diff.js';
 import { initAgent, applyAgentMeta, loadAgentAsync } from './agent.js';
 import { initMetrics, initStatusFit, updateMetricsDisplay, updateStatus } from './status.js';
 import { initSettings } from './settings.js';
-import { initVim } from './vim.js';
 import { initImageViewer } from './imageview.js';
+import { initEdit } from './edit.js';
 
 // Initialize all subsystems
 initRenderer();
@@ -44,8 +44,8 @@ initAgent();
 initMetrics();
 initStatusFit();
 initSettings();
-initVim();
 initImageViewer();
+initEdit();
 
 // Bootstrap application lifecycle
 (async function boot() {

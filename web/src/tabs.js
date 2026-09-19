@@ -36,7 +36,7 @@ export async function openFile(path, opts = {}) {
     const d = {
       path, name: path.split('/').pop(), lang: isImg ? 'image' : j.lang,
       total: isImg ? 0 : j.total, maxCols: isImg ? 0 : j.maxCols,
-      size: j.size, lines: isImg ? [] : new Array(j.total),
+      size: j.size, mtime: j.mtime, lines: isImg ? [] : new Array(j.total),
       chunks: new Set(isImg ? [] : [start / CHUNK]),
       pending: new Set(), refining: new Set(), scrollTop: 0, cur: line || 1,
       outline: null, gen: 0, markdown: !isImg && !!j.markdown, isImage: isImg,
@@ -143,6 +143,10 @@ export async function reloadOpenTabs() {
     const tgt = targets[i];
     const idx = S.tabs.indexOf(tgt.oldDoc);
     if (idx < 0) continue; // tab closed while reloading
+    // An unsaved in-place edit is never clobbered by a reload (e.g. an agent
+    // edit finishing on a *different* file, or a rename): there is nothing on
+    // disk yet that should take priority over it.
+    if (tgt.oldDoc.buf?.dirty) continue;
 
     if (res.status !== 'fulfilled') {
       if (idx === S.active) {
@@ -174,6 +178,7 @@ export async function reloadOpenTabs() {
       maxCols: j.maxCols,
       size: j.size,
       lines: new Array(j.total),
+      mtime: j.mtime,
       chunks: new Set([tgt.start / CHUNK]),
       pending: new Set(),
       refining: new Set(),
@@ -231,6 +236,8 @@ export function centerLine(n) {
 }
 
 export function closeTab(i) {
+  const target = S.tabs[i];
+  if (target?.buf?.dirty && !confirm('Discard unsaved changes to ' + target.path + '?')) return;
   clearSelectAll();
   const [closed] = S.tabs.splice(i, 1);
   if (closed) {
@@ -289,6 +296,7 @@ export function drawTabs() {
     '<div class="tab' + (i === S.active ? ' active' : '') + (t.isImage ? ' tab-image' : '') + (t.diffAvailable ? ' git-modified' : '') + '" data-i="' + i + '" title="' + esc(t.path) + '">' +
     (t.isImage ? '<svg class="tab-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><circle cx="5.5" cy="5.5" r="1.5"/><path d="M14 10l-3.5-3.5L3 14"/></svg>' : '') +
     '<span class="tn">' + esc(t.name) + '</span>' +
+    (t.buf?.dirty ? '<span class="tab-dirty-dot" title="' + withKeys('Unsaved edit ({Mod+S} to save)') + '">●</span>' : '') +
     (t.diffAvailable ? '<span class="tab-git-dot" title="Modified in git">●</span>' : '') +
     '<span class="x" data-close="' + i + '" title="' + withKeys('Close tab ({Alt+W})') + '"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></span></div>').join('');
   const act = $('#tabs .tab.active');
@@ -376,4 +384,7 @@ export function initTabs() {
       if (c) { showPanel('files'); revealDir(c.dataset.dir); }
     });
   }
+  addEventListener('beforeunload', e => {
+    if (S.tabs.some(t => t.buf?.dirty)) { e.preventDefault(); e.returnValue = ''; }
+  });
 }

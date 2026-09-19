@@ -8,6 +8,19 @@ import { pushHistory } from './history.js';
 
 export const WORD = /[A-Za-z0-9_$]/;
 
+/* The current text of line n. Once d.buf is set (an in-place edit has
+   started, edit.js), the buffer is authoritative and may hold lines that
+   are not currently rendered (scrolled out of the virtualized window) --
+   reading $('.c', rowFor(n)).textContent in that case silently clamps to an
+   empty string instead of the real line, which throws every caret op after
+   a splice off by one. Falls back to the rendered DOM for the read-only
+   (unedited) path, unchanged from before. */
+export function lineText(d, n) {
+  if (d.buf) return d.buf.lines[n - 1] ?? '';
+  const row = rowFor(n);
+  return row ? $('.c', row).textContent : '';
+}
+
 /* Returns {word, line, col} where col counts UTF-16 units from the start of the
    line, which is both what JS string indexes give us and what the server needs
    to place an LSP request. Walking text nodes keeps this correct even after
@@ -92,7 +105,7 @@ export function updateDomSelection() {
     return;
   }
   const pa = toPoint(d.selAnchor);
-  const headCol = d.col === Infinity ? (rowFor(d.cur) ? $('.c', rowFor(d.cur)).textContent.length : 0) : (d.col || 0);
+  const headCol = d.col === Infinity ? lineText(d, d.cur).length : (d.col || 0);
   const pf = toPoint({ line: d.cur, col: headCol });
   if (pa && pf) {
     sel.setBaseAndExtent(pa[0], pa[1], pf[0], pf[1]);
@@ -101,7 +114,7 @@ export function updateDomSelection() {
 
 function ensureAnchor(d) {
   if (!d.selAnchor) {
-    const col = d.col === Infinity ? (rowFor(d.cur) ? $('.c', rowFor(d.cur)).textContent.length : 0) : (d.col || 0);
+    const col = d.col === Infinity ? lineText(d, d.cur).length : (d.col || 0);
     d.selAnchor = { line: d.cur, col };
   }
 }
@@ -120,8 +133,7 @@ export function moveCol(delta, shift = false) {
   if (shift) ensureAnchor(d);
   else d.selAnchor = null;
 
-  const row = rowFor(d.cur);
-  const len = row ? $('.c', row).textContent.length : 0;
+  const len = lineText(d, d.cur).length;
   const col = Math.min(d.col || 0, len) + delta;
   if (col < 0) {
     if (d.cur > 1) { d.col = Infinity; moveCursor(-1, shift); }
@@ -144,8 +156,7 @@ export function moveWord(delta, shift = false) {
   if (shift) ensureAnchor(d);
   else d.selAnchor = null;
 
-  const row = rowFor(d.cur);
-  const text = row ? $('.c', row).textContent : '';
+  const text = lineText(d, d.cur);
   const len = text.length;
   let col = Math.min(d.col === Infinity ? len : (d.col || 0), len);
 

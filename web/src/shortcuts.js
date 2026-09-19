@@ -18,10 +18,13 @@ import { cycleTheme } from './theme.js';
 import { previewing, togglePreview, previewKey, selectPreview } from './markdown.js';
 import { toggleDiff } from './diff.js';
 import { openSettings, closeSettings, isSettingsOpen } from './settings.js';
-import { handleVimKeyDown, showVimHelp, closeVimHelp } from './vim.js';
 import { handleImageKey } from './imageview.js';
 import { submitBatch } from './agent.js';
 import { reindexWorkspace } from './panels.js';
+import {
+  editAvailable, isDirty, saveBuffer, undo, redo,
+  insertText, insertNewline, insertTab, backspace, deleteForward,
+} from './edit.js';
 
 /* Each entry lists alternative combos, written as for keyLabel in state.js so
    they show as ⌘/⌥/⇧ on a Mac and Ctrl/Alt/Shift elsewhere. Browsers keep
@@ -32,6 +35,7 @@ export const SHORTCUTS = [
   [['Mod+Shift+P'], 'Command palette'], [['Mod+Shift+O'], 'Go to symbol'],
   [['Mod+Shift+F'], 'Search in files'], [['Mod+Shift+R'], 'Refresh workspace'], [['Mod+F'], 'Find in file'],
   [['Mod+G'], 'Go to line'], [['Mod+D'], 'Toggle diff view (git)'], [['Alt+Z'], 'Toggle word wrap'],
+  [['Click, then type'], 'Edit the file directly'], [['Mod+S'], 'Save'], [['Mod+Z', 'Mod+Shift+Z'], 'Undo / redo edit'],
   [['Alt+M'], 'Toggle Markdown preview'],
   [['Enter', 'Shift+Enter'], 'Next / previous match'],
   [['F12', 'Mod+Click'], 'Go to definition'], [['Shift+F12'], 'Find all references'],
@@ -54,16 +58,11 @@ export function showHelp() {
   const h = $('#helpsheet');
   const ver = S.meta?.version ? ` <span class="help-version">v${esc(S.meta.version)}</span>` : '';
   h.innerHTML = '<div class="help-card"><div class="help-header"><h2>Keyboard Shortcuts</h2>' + ver +
-    '<button id="btn-switch-to-vim-help" class="settings-btn-link" style="margin-left:auto;font-size:12px;cursor:pointer;">View Vim Keybindings</button></div><dl class="help-grid">' +
+    '</div><dl class="help-grid">' +
     SHORTCUTS.map(([combos, v]) =>
       '<dt>' + combos.map(keyCaps).filter(Boolean).join('<span class="key-or">/</span>') + '</dt>' +
       '<dd>' + esc(v) + '</dd>').join('') + '</dl></div>';
   h.hidden = false;
-  h.querySelector('#btn-switch-to-vim-help')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    h.hidden = true;
-    showVimHelp();
-  });
 }
 
 export const inField = el => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
@@ -89,7 +88,6 @@ export function initShortcuts() {
     else if (act === 'md-preview') togglePreview();
     else if (act === 'palette') openPalette('command');
     else if (act === 'settings') openSettings('ui');
-    else if (act === 'vim-help') showVimHelp();
     else if (act === 'help') showHelp();
   });
 
@@ -99,12 +97,13 @@ export function initShortcuts() {
     if (e.key === 'Escape') {
       const lb = $('#img-lightbox');
       if (lb && !lb.hidden) { lb.hidden = true; return; }
-      if (!$('#vim-helpsheet')?.hidden) { closeVimHelp(); return; }
       if (isSettingsOpen()) { closeSettings(); return; }
       if (!overlay.hidden) { closePalette(); return; }
       if (!$('#helpsheet').hidden) { $('#helpsheet').hidden = true; return; }
       if (!hovercard.hidden) { clearLink(); return; }
       if (!findbar.hidden) { clearFind(); return; }
+      const eb = $('#edit-banner');
+      if (eb && !eb.hidden) { eb.hidden = true; return; }
       if (S.selAll) { clearSelectAll(); return; }
       if (!document.body.classList.contains('right-hidden')) { hideRightInspector(); return; }
       if (S.occ) { S.occ = null; paint(); return; }
@@ -142,6 +141,18 @@ export function initShortcuts() {
     if (mod && (e.key === 'b' || e.key === 'B')) { e.preventDefault(); document.body.classList.toggle('side-hidden'); layout(); render(); return; }
     // Diff view of the open file (git only; fails quiet when git is off).
     if (mod && !e.shiftKey && (e.key === 'd' || e.key === 'D')) { if (S.meta?.git) { e.preventDefault(); toggleDiff(); } return; }
+    // Save works whenever the active tab has an unsaved in-place edit;
+    // harmless (does nothing) otherwise, so it doesn't need an editability gate.
+    if (mod && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
+      const d = doc_();
+      if (d && isDirty(d)) { e.preventDefault(); saveBuffer(d); }
+      return;
+    }
+    if (mod && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
+      const d = doc_();
+      if (d && editAvailable(d)) { e.preventDefault(); if (e.shiftKey) redo(d); else undo(d); }
+      return;
+    }
     // Alt shortcuts match e.code: on a Mac, Option+letter types a symbol, so e.key is not the letter.
     if ((mod && (e.key === 'w' || e.key === 'W')) || (e.altKey && e.code === 'KeyW')) {
       e.preventDefault();
@@ -194,7 +205,21 @@ export function initShortcuts() {
     if (plainMod && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); if (previewing()) selectPreview(); else selectAll(); return; }
     if (plainMod && (e.key === 'c' || e.key === 'C') && copySelectAll()) { e.preventDefault(); return; }
 
-    if (handleVimKeyDown(e)) return;
+    // Click into an editable file and type -- no separate mode. Takes over
+    // Backspace/Delete/Enter/Tab and any plain character for that file, which
+    // deliberately shadows the read-view's plain j/k navigation and ? help
+    // shortcut below: once a file can be typed into, a literal "j" must type
+    // "j", not scroll. Read-only files (images, oversized) are unaffected.
+    if (!mod && !e.altKey) {
+      const d = doc_();
+      if (d && editAvailable(d)) {
+        if (e.key === 'Backspace') { e.preventDefault(); backspace(d); return; }
+        if (e.key === 'Delete') { e.preventDefault(); deleteForward(d); return; }
+        if (e.key === 'Enter') { e.preventDefault(); insertNewline(d); return; }
+        if (e.key === 'Tab') { e.preventDefault(); insertTab(d); return; }
+        if (e.key.length === 1) { e.preventDefault(); insertText(d, e.key); return; }
+      }
+    }
 
     if (e.key === '?') { e.preventDefault(); showHelp(); return; }
     const d = doc_();
