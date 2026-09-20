@@ -116,18 +116,31 @@ Run `./benchmark.sh --vscode .` to measure both on your active machine:
 Run `px1` with an optional file or directory:
 
 ```bash
-px1                     # view current workspace
+px1                     # view current workspace, hand the shell back immediately
 px1 ~/src/kernel        # view another repository
 px1 web/src/main.js     # view a file in its project workspace
 px1 main.go:42          # open directly to a line number
-px1 -d ~/work/repo      # run in the background, hand the shell back immediately
 ```
 
-Running with `-d` frees your terminal right away instead of blocking it, so you can open several workspaces at once — each instance walks forward to the next free port automatically:
+px1 runs in the background by default and frees your terminal right away, so you can open several workspaces at once — each instance walks forward to the next free port automatically:
 
 ```bash
-px1 -d ~/work/api       # -> http://127.0.0.1:7777
-px1 -d ~/work/frontend  # -> http://127.0.0.1:7778
+px1 ~/work/api          # -> http://127.0.0.1:7777
+px1 ~/work/frontend     # -> http://127.0.0.1:7778
+```
+
+Manage the running instances:
+
+```bash
+px1 ps                  # list every running instance: pid, url, workspace, uptime
+px1 kill 58133          # stop one instance by pid
+px1 kill-all            # stop every running instance
+```
+
+Pass `-f` to run in the foreground and block the shell instead (e.g. under a process supervisor):
+
+```bash
+px1 -f ~/work/repo
 ```
 
 ### Remote & Cloud Workspaces
@@ -141,8 +154,8 @@ px1 -host 0.0.0.0 -port 7777 ~/work/repo
 # Headless / server mode without opening local browser
 px1 -no-open -port 8080 /workspace
 
-# CI runner
-px1 -d -no-open -port 8080 /workspace
+# CI runner (foreground, blocks until stopped)
+px1 -f -no-open -port 8080 /workspace
 ```
 
 Access securely over Tailscale, WireGuard, reverse proxy, or Cloudflare Tunnel with zero remote setup overhead and sandboxing (path traversal protection & DNS rebinding checks). Anyone who can reach px1 can save, stage, or commit when it is opened by IP address (for example over Tailscale), so bind to a private network. Opened through a hostname, such as a reverse proxy or tunnel domain, writes are refused.
@@ -155,11 +168,19 @@ Access securely over Tailscale, WireGuard, reverse proxy, or Cloudflare Tunnel w
 | `-host H`    | `127.0.0.1` | Local address to bind                                           |
 | `-no-open`   | `false`     | Do not launch the web browser automatically                     |
 | `-no-git`    | `false`     | Disable git awareness (tree status badges, diff view, staging)  |
-| `-d`         | `false`     | Run detached in the background and return control to the shell  |
+| `-f`         | `false`     | Run in the foreground and block the shell (default: background) |
 | `-no-color`  | `false`     | Strip ANSI escape sequences from terminal output                |
 | `-quiet`     | `false`     | Suppress CLI narration (errors still print to stderr)           |
 | `-verbose`   | `false`     | Log requests and searches to the terminal                       |
 | `-version`   | `false`     | Print version and architecture and exit                         |
+
+### Commands
+
+| Command          | Description                                    |
+| ---------------- | ----------------------------------------------- |
+| `px1 ps`         | List running instances: pid, url, workspace, uptime |
+| `px1 kill <pid>` | Stop one instance                              |
+| `px1 kill-all`   | Stop every running instance                    |
 
 ## Keyboard Shortcuts
 

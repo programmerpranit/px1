@@ -36,13 +36,28 @@ func main() {
 		noColor      = flag.Bool("no-color", false, "disable colour output")
 		quiet        = flag.Bool("quiet", false, "suppress narration")
 		verbose      = flag.Bool("verbose", false, "log requests and searches to terminal")
-		detach       = flag.Bool("d", false, "run in the background and return control to the shell")
+		foreground   = flag.Bool("f", false, "run in the foreground and block the shell (default: background)")
+		_            = flag.Bool("d", false, "(deprecated, background is now the default)")
 	)
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "px1 %s - a code navigator\n\nusage: px1 [flags] [file or directory]\n\nflags:\n", version)
+		fmt.Fprintf(os.Stderr, "px1 %s - a code navigator\n\nusage: px1 [flags] [file or directory]\n       px1 ps               list running px1 instances\n       px1 kill <pid>       stop one instance\n       px1 kill-all         stop every running instance\n\nflags:\n", version)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	switch {
+	case flag.NArg() == 1 && flag.Arg(0) == "ps":
+		runPS()
+		return
+	case flag.NArg() == 1 && flag.Arg(0) == "kill-all":
+		runKillAll()
+		return
+	case flag.NArg() == 2 && flag.Arg(0) == "kill":
+		runKill(flag.Arg(1))
+		return
+	case flag.NArg() >= 1 && flag.Arg(0) == "kill":
+		fatal(fmt.Errorf("usage: px1 kill <pid>"))
+	}
 
 	if *noColor {
 		f := false
@@ -63,7 +78,7 @@ func main() {
 		return
 	}
 
-	if *detach && !isDaemonChild() {
+	if !*foreground && !isDaemonChild() {
 		runDetached()
 		return
 	}
@@ -97,6 +112,8 @@ func main() {
 	if isDaemonChild() {
 		reportDaemonReady(root, url)
 	}
+	registerInstance(root, url)
+	defer unregisterInstance()
 	uiHeading("px1 "+version, nil, os.Stdout)
 	uiKV("workspace", root, 11, os.Stdout)
 	uiKV("url", uiAccent(url, os.Stdout), 11, os.Stdout)
@@ -120,6 +137,7 @@ func main() {
 	go func() {
 		<-stop
 		interrupted = true
+		unregisterInstance()
 		fmt.Print("\r")
 		uiStatus("info", "px1 stopped", "", 0, os.Stderr)
 		go func() {

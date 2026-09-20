@@ -108,6 +108,6 @@ func runDetached() {
 	uiKV("url", uiAccent(st.URL, os.Stdout), 11, os.Stdout)
 	uiKV("pid", strconv.Itoa(st.PID), 11, os.Stdout)
 	uiKV("log", logPath, 11, os.Stdout)
-	uiHint("running in the background — kill "+strconv.Itoa(st.PID)+" to stop it", os.Stdout)
+	uiHint("running in the background — px1 kill "+strconv.Itoa(st.PID)+" (or px1 kill-all) to stop it", os.Stdout)
 	os.Exit(0)
 }
