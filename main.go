@@ -287,7 +287,7 @@ func listen(host string, port int) (net.Listener, string, error) {
 func openBrowser(url string) {
 	// If BROWSER environment variable is set, try that first
 	if b := os.Getenv("BROWSER"); b != "" {
-		if cmd := exec.Command(b, url); cmd.Start() == nil {
+		if cmd := quietCommand(b, url); cmd.Start() == nil {
 			return
 		}
 	}
@@ -295,11 +295,11 @@ func openBrowser(url string) {
 	var cmds []*exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmds = []*exec.Cmd{exec.Command("open", url)}
+		cmds = []*exec.Cmd{quietCommand("open", url)}
 	case "windows":
 		cmds = []*exec.Cmd{
-			exec.Command("rundll32", "url.dll,FileProtocolHandler", url),
-			exec.Command("cmd.exe", "/c", "start", url),
+			quietCommand("rundll32", "url.dll,FileProtocolHandler", url),
+			quietCommand("cmd.exe", "/c", "start", url),
 		}
 	default:
 		// On Linux/Unix, detect WSL to open the browser on the Windows host seamlessly
@@ -310,20 +310,20 @@ func openBrowser(url string) {
 			// connection error until the next reload.
 			time.Sleep(500 * time.Millisecond)
 			cmds = append(cmds,
-				exec.Command("wslview", url),
-				exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Start-Process", fmt.Sprintf(`"%s"`, url)),
-				exec.Command("cmd.exe", "/c", "start", "", url),
+				quietCommand("wslview", url),
+				quietCommand("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Start-Process", fmt.Sprintf(`"%s"`, url)),
+				quietCommand("cmd.exe", "/c", "start", "", url),
 			)
 		}
 
 		// On Linux/Unix desktop, try xdg-open, sensible-browser, gio, or common browsers
 		cmds = append(cmds,
-			exec.Command("xdg-open", url),
-			exec.Command("sensible-browser", url),
-			exec.Command("gio", "open", url),
-			exec.Command("google-chrome", url),
-			exec.Command("firefox", url),
-			exec.Command("chromium", url),
+			quietCommand("xdg-open", url),
+			quietCommand("sensible-browser", url),
+			quietCommand("gio", "open", url),
+			quietCommand("google-chrome", url),
+			quietCommand("firefox", url),
+			quietCommand("chromium", url),
 		)
 	}
 

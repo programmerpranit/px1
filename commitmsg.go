@@ -24,11 +24,14 @@ func generateCommitMessage(ctx context.Context, root string) (string, error) {
 		diff = diff[:maxDiff] + "\n... (diff truncated)"
 	}
 
-	prompt := "Write a single concise git commit message (Conventional Commits style, one line, no body, no quotes, no markdown) " +
-		"for the staged diff on stdin. Output only the message text, nothing else.\n\n" + diff
+	// The diff goes over stdin, not argv: Windows caps a command line at 32k
+	// characters, and just 8k when claude resolves to a .cmd shim.
+	const prompt = "Write a single concise git commit message (Conventional Commits style, one line, no body, no quotes, no markdown) " +
+		"for the staged diff on stdin. Output only the message text, nothing else."
 
-	cmd := exec.CommandContext(ctx, "claude", "-p", prompt)
+	cmd := quietCommandContext(ctx, "claude", "-p", prompt)
 	cmd.Dir = root
+	cmd.Stdin = strings.NewReader(diff)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -40,7 +40,7 @@ func gitProbe(root string) gitInfo {
 	}
 	var info gitInfo
 	if _, err := exec.LookPath("git"); err == nil {
-		if out, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output(); err == nil {
+		if out, err := quietCommand("git", "-C", root, "rev-parse", "--show-toplevel").Output(); err == nil {
 			info = gitInfo{ok: true, toplevel: strings.TrimSpace(string(out))}
 		}
 	}
@@ -56,7 +56,7 @@ func gitStatus(root string) map[string]string {
 	if !info.ok {
 		return nil
 	}
-	out, err := exec.Command("git", "-C", root, "status", "--porcelain=v2", "-z", "-uall").Output()
+	out, err := quietCommand("git", "-C", root, "status", "--porcelain=v2", "-z", "-uall").Output()
 	if err != nil {
 		return nil
 	}
@@ -150,7 +150,7 @@ func gitDiff(root, relpath string) string {
 	if !gitAvailable(root) {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", root, "diff", "--no-color", "HEAD", "--", relpath).Output()
+	out, err := quietCommand("git", "-C", root, "diff", "--no-color", "HEAD", "--", relpath).Output()
 	if err != nil {
 		return ""
 	}
@@ -194,7 +194,7 @@ func gitStatusXY(root string) []GitFileStatus {
 	if !info.ok {
 		return nil
 	}
-	out, err := exec.Command("git", "-C", root, "status", "--porcelain=v2", "-z", "-uall").Output()
+	out, err := quietCommand("git", "-C", root, "status", "--porcelain=v2", "-z", "-uall").Output()
 	if err != nil {
 		return nil
 	}
@@ -257,7 +257,7 @@ func gitDiffCached(root, relpath string) string {
 	if !gitAvailable(root) {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", root, "diff", "--cached", "--no-color", "--", relpath).Output()
+	out, err := quietCommand("git", "-C", root, "diff", "--cached", "--no-color", "--", relpath).Output()
 	if err != nil {
 		return ""
 	}
@@ -270,7 +270,7 @@ func gitDiffCachedAll(root string) string {
 	if !gitAvailable(root) {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", root, "diff", "--cached", "--no-color").Output()
+	out, err := quietCommand("git", "-C", root, "diff", "--cached", "--no-color").Output()
 	if err != nil {
 		return ""
 	}
@@ -283,7 +283,7 @@ func gitDiffUnstaged(root, relpath string) string {
 	if !gitAvailable(root) {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", root, "diff", "--no-color", "--", relpath).Output()
+	out, err := quietCommand("git", "-C", root, "diff", "--no-color", "--", relpath).Output()
 	if err != nil {
 		return ""
 	}
@@ -292,12 +292,12 @@ func gitDiffUnstaged(root, relpath string) string {
 
 // gitHasHEAD reports whether the repo has at least one commit.
 func gitHasHEAD(root string) bool {
-	return exec.Command("git", "-C", root, "rev-parse", "--verify", "-q", "HEAD").Run() == nil
+	return quietCommand("git", "-C", root, "rev-parse", "--verify", "-q", "HEAD").Run() == nil
 }
 
 // gitStage runs `git add` on relpath, staging its current worktree content.
 func gitStage(root, relpath string) error {
-	out, err := exec.Command("git", "-C", root, "add", "--", relpath).CombinedOutput()
+	out, err := quietCommand("git", "-C", root, "add", "--", relpath).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
@@ -310,9 +310,9 @@ func gitStage(root, relpath string) error {
 func gitUnstage(root, relpath string) error {
 	var cmd *exec.Cmd
 	if gitHasHEAD(root) {
-		cmd = exec.Command("git", "-C", root, "reset", "-q", "HEAD", "--", relpath)
+		cmd = quietCommand("git", "-C", root, "reset", "-q", "HEAD", "--", relpath)
 	} else {
-		cmd = exec.Command("git", "-C", root, "rm", "--cached", "-q", "--", relpath)
+		cmd = quietCommand("git", "-C", root, "rm", "--cached", "-q", "--", relpath)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -339,7 +339,7 @@ func gitDiscard(root, relpath string) error {
 		}
 		break
 	}
-	out, err := exec.Command("git", "-C", root, "checkout", "--", relpath).CombinedOutput()
+	out, err := quietCommand("git", "-C", root, "checkout", "--", relpath).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
@@ -356,7 +356,7 @@ func gitStageAll(root string, paths []string) error {
 		return nil
 	}
 	args := append([]string{"-C", root, "add", "--"}, paths...)
-	out, err := exec.Command("git", args...).CombinedOutput()
+	out, err := quietCommand("git", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
@@ -375,7 +375,7 @@ func gitUnstageAll(root string, paths []string) error {
 	} else {
 		args = append([]string{"-C", root, "rm", "--cached", "-q", "--"}, paths...)
 	}
-	out, err := exec.Command("git", args...).CombinedOutput()
+	out, err := quietCommand("git", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
@@ -410,7 +410,7 @@ func gitDiscardAll(root string, paths []string) error {
 	}
 	if len(toCheckout) > 0 {
 		args := append([]string{"-C", root, "checkout", "--"}, toCheckout...)
-		out, err := exec.Command("git", args...).CombinedOutput()
+		out, err := quietCommand("git", args...).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
 		}
@@ -422,7 +422,7 @@ func gitDiscardAll(root string, paths []string) error {
 // user.name/user.email, or nothing staged) are returned verbatim from git so
 // the UI can show them.
 func gitCommit(root, message string) error {
-	out, err := exec.Command("git", "-C", root, "commit", "-m", message).CombinedOutput()
+	out, err := quietCommand("git", "-C", root, "commit", "-m", message).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
@@ -442,20 +442,20 @@ type GitSyncStatus struct {
 }
 
 func gitSyncStatus(root string) GitSyncStatus {
-	branch, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	branch, err := quietCommand("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return GitSyncStatus{}
 	}
 	st := GitSyncStatus{Branch: strings.TrimSpace(string(branch))}
 
-	upstream, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").Output()
+	upstream, err := quietCommand("git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").Output()
 	if err != nil {
 		return st // no upstream configured
 	}
 	st.Upstream = strings.TrimSpace(string(upstream))
 	st.HasUpstream = true
 
-	out, err := exec.Command("git", "-C", root, "rev-list", "--left-right", "--count", "HEAD...@{u}").Output()
+	out, err := quietCommand("git", "-C", root, "rev-list", "--left-right", "--count", "HEAD...@{u}").Output()
 	if err != nil {
 		return st
 	}
@@ -468,7 +468,7 @@ func gitSyncStatus(root string) GitSyncStatus {
 }
 
 func gitPush(root string) error {
-	out, err := exec.Command("git", "-C", root, "push").CombinedOutput()
+	out, err := quietCommand("git", "-C", root, "push").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
